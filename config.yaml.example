@@ -1,0 +1,34 @@
+# Certificate Guardian Configuration
+
+database:
+  path: "data/certificates.db"
+
+mattermost:
+  webhook_url: "https://your-mattermost.com/hooks/xxxxxxxxxxxxx"
+  channel: "#security-alerts"
+  username: "Certificate Guardian"
+  icon_emoji: ":lock:"
+
+# Endpoints to scan
+endpoints:
+  - host: "google.com"
+    port: 443
+    owner: "External Test"
+    criticality: "low"
+  
+  - host: "github.com"
+    port: 443
+    owner: "External Test"
+    criticality: "low"
+
+# Notification thresholds (days before expiry)
+notifications:
+  warning_days: [90, 60, 30, 14, 7, 3, 1]
+  critical_days: 7
+  emergency_days: 1
+
+# Scan settings
+scanner:
+  interval_seconds: 3600  # Scan every hour
+  timeout_seconds: 10
+  max_concurrent: 10

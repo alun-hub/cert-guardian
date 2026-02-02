@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  cert-guardian:
+    build: .
+    container_name: cert-guardian
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./cert-guardian.log:/app/cert-guardian.log
+    environment:
+      - TZ=Europe/Stockholm
+    # Run continuous monitoring
+    command: python /app/src/main.py --config /app/config/config.yaml
+
+  # Optional: Run daily summary as a separate service with cron-like behavior
+  cert-guardian-summary:
+    build: .
+    container_name: cert-guardian-summary
+    restart: "no"
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    environment:
+      - TZ=Europe/Stockholm
+    command: python /app/src/main.py --config /app/config/config.yaml --summary
+    # Use a cron job or systemd timer to run this container daily

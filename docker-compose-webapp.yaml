@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: cert-guardian-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./src:/app/src:ro
+    environment:
+      - TZ=Europe/Stockholm
+      - PYTHONUNBUFFERED=1
+    command: python /app/backend/api.py
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cert-guardian-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+
+  # Scanner Service (runs periodically)
+  scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cert-guardian-scanner
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./src:/app/src:ro
+    environment:
+      - TZ=Europe/Stockholm
+    command: python /app/src/main.py

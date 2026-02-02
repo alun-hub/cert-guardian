@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-guardian
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cert-guardian-config
+  namespace: cert-guardian
+data:
+  config.yaml: |
+    database:
+      path: "data/certificates.db"
+    
+    mattermost:
+      webhook_url: "https://your-mattermost.com/hooks/xxxxxxxxxxxxx"
+      channel: "#security-alerts"
+      username: "Certificate Guardian"
+      icon_emoji: ":lock:"
+    
+    endpoints:
+      - host: "example.com"
+        port: 443
+        owner: "IT Team"
+        criticality: "high"
+    
+    notifications:
+      warning_days: [90, 60, 30, 14, 7, 3, 1]
+      critical_days: 7
+      emergency_days: 1
+    
+    scanner:
+      interval_seconds: 3600
+      timeout_seconds: 10
+      max_concurrent: 10
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cert-guardian-data
+  namespace: cert-guardian
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cert-guardian
+  namespace: cert-guardian
+  labels:
+    app: cert-guardian
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cert-guardian
+  template:
+    metadata:
+      labels:
+        app: cert-guardian
+    spec:
+      containers:
+      - name: cert-guardian
+        image: cert-guardian:latest
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: data
+          mountPath: /app/data
+        env:
+        - name: TZ
+          value: "Europe/Stockholm"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - "import sqlite3; conn = sqlite3.connect('/app/data/certificates.db'); conn.close()"
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: cert-guardian-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: cert-guardian-data
+      restartPolicy: Always
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cert-guardian-summary
+  namespace: cert-guardian
+spec:
+  schedule: "0 8 * * *"  # Daily at 08:00
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: summary
+            image: cert-guardian:latest
+            imagePullPolicy: IfNotPresent
+            command:
+            - python3
+            - /app/src/main.py
+            - --config
+            - /app/config/config.yaml
+            - --summary
+            volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: data
+              mountPath: /app/data
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "128Mi"
+                cpu: "100m"
+          volumes:
+          - name: config
+            configMap:
+              name: cert-guardian-config
+          - name: data
+            persistentVolumeClaim:
+              claimName: cert-guardian-data
+          restartPolicy: OnFailure

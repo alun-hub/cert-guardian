@@ -1,0 +1,11 @@
+[Unit]
+Description=Certificate Guardian Daily Summary
+Requires=cert-guardian-summary.service
+
+[Timer]
+OnCalendar=daily
+OnCalendar=08:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
