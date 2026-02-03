@@ -3,23 +3,20 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt backend/requirements.txt ./
+COPY requirements.txt ./
+COPY backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -r backend/requirements.txt
 
 # Copy application files
 COPY src/ /app/src/
 COPY backend/ /app/backend/
-COPY config/ /app/config/
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create directories
+RUN mkdir -p /app/data /app/config
 
-# Expose port
 EXPOSE 8000
 
-# Set Python to unbuffered mode
 ENV PYTHONUNBUFFERED=1
 
-# Run FastAPI with uvicorn
 CMD ["uvicorn", "backend.api:app", "--host", "0.0.0.0", "--port", "8000"]

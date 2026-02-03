@@ -3,19 +3,16 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install dependencies
-RUN pip install --no-cache-dir \
-    pyyaml \
-    requests
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY src/ /app/src/
-COPY config/ /app/config/
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create directories
+RUN mkdir -p /app/data /app/config
 
-# Set Python to unbuffered mode for better logging
+# Set Python to unbuffered mode
 ENV PYTHONUNBUFFERED=1
 
-# Run the application
 CMD ["python", "/app/src/main.py", "--config", "/app/config/config.yaml"]

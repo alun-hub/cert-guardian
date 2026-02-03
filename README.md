@@ -150,14 +150,26 @@ scanner:
 - Database innehåller cert fingerprints - kan vara känsligt
 - Scanning kan trigga IDS/IPS - whitelist scanner IP
 
+## Webbgränssnitt
+
+Certificate Guardian inkluderar ett komplett webbgränssnitt. Se [WEBAPP_README.md](WEBAPP_README.md) för detaljer.
+
+```bash
+# Starta med webbgränssnitt
+podman-compose -f docker-compose-webapp.yaml up -d
+
+# Frontend: http://localhost:3000
+# API Docs: http://localhost:8000/docs
+```
+
 ## Framtida förbättringar
 
+- [x] ~~REST API för externa integrations~~
+- [x] ~~Web dashboard för överblick~~
 - [ ] Support för client certificate authentication
 - [ ] Filesystem scanning för .pem/.crt filer
 - [ ] LDAP/AD integration för user certificates
 - [ ] Automatisk renewal för Let's Encrypt certs
-- [ ] REST API för externa integrations
-- [ ] Web dashboard för överblick
 - [ ] Support för flera notification channels (email, Slack, etc.)
 - [ ] Kubernetes CRD för native k8s integration
 

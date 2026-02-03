@@ -52,15 +52,19 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 └─────────────────────────────────────────────────┘
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: Podman Compose (Rekommenderad)
 
 ```bash
-# Build and start all services
-docker-compose -f docker-compose-webapp.yaml up -d
+# Konfigurera
+cp config/config.yaml.example config/config.yaml
+nano config/config.yaml
 
-# Access the application
+# Bygg och starta
+podman-compose -f docker-compose-webapp.yaml up -d
+
+# Åtkomst:
 # Frontend: http://localhost:3000
 # Backend API: http://localhost:8000
 # API Docs: http://localhost:8000/docs
@@ -70,29 +74,19 @@ docker-compose -f docker-compose-webapp.yaml up -d
 
 **Backend:**
 ```bash
-# Install dependencies
 pip install -r requirements.txt
 pip install -r backend/requirements.txt
 
-# Run FastAPI server
 cd backend
-python api.py
-
-# Or with uvicorn directly
 uvicorn api:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Frontend:**
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Run development server
 npm run dev
-
-# Access at http://localhost:3000
+# http://localhost:3000
 ```
 
 ## 📡 API Documentation

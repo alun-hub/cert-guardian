@@ -16,7 +16,10 @@ dist/
 .vscode/
 *.swp
 
-# Local config
-config.yaml
+# Local config and data
+config/config.yaml
+data/
 *.db
 *.sqlite
+*.db-journal
+*.log
