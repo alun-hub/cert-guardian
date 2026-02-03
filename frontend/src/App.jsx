@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Certificates from './pages/Certificates'
 import Endpoints from './pages/Endpoints'
 import Security from './pages/Security'
+import SettingsPage from './pages/Settings'
 
 function App() {
   return (
@@ -32,6 +33,9 @@ function App() {
             <NavLink to="/security" icon={<Shield className="w-5 h-5" />}>
               Security
             </NavLink>
+            <NavLink to="/settings" icon={<Settings className="w-5 h-5" />}>
+              Settings
+            </NavLink>
           </nav>
 
           <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-800">
@@ -46,6 +50,7 @@ function App() {
             <Route path="/certificates" element={<Certificates />} />
             <Route path="/endpoints" element={<Endpoints />} />
             <Route path="/security" element={<Security />} />
+            <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </div>
       </div>

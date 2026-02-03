@@ -40,9 +40,44 @@ class CertificateInfo:
 
 
 class TLSScanner:
-    def __init__(self, timeout: int = 10):
+    def __init__(self, timeout: int = 10, custom_ca_pems: List[str] = None):
         self.timeout = timeout
-    
+        self.custom_ca_pems = custom_ca_pems or []
+        self._custom_ca_file = None
+
+    def set_custom_cas(self, ca_pems: List[str]):
+        """Update custom CA certificates"""
+        self.custom_ca_pems = ca_pems
+        self._custom_ca_file = None  # Reset cached file
+
+    def _get_ca_context(self) -> ssl.SSLContext:
+        """Create SSL context with system + custom CAs"""
+        import tempfile
+        import os
+
+        context = ssl.create_default_context(cafile=CA_FILE)
+
+        # Add custom CAs if any
+        if self.custom_ca_pems:
+            # Create temp file with all CAs
+            if not self._custom_ca_file or not os.path.exists(self._custom_ca_file):
+                fd, self._custom_ca_file = tempfile.mkstemp(suffix='.pem')
+                with os.fdopen(fd, 'w') as f:
+                    # First add system CAs
+                    if CA_FILE:
+                        with open(CA_FILE, 'r') as system_cas:
+                            f.write(system_cas.read())
+                    # Then add custom CAs
+                    for pem in self.custom_ca_pems:
+                        f.write('\n')
+                        f.write(pem)
+
+            context = ssl.create_default_context(cafile=self._custom_ca_file)
+
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        return context
+
     def scan_endpoint(self, host: str, port: int = 443) -> Optional[CertificateInfo]:
         """
         Scan a TLS endpoint and extract certificate information
@@ -62,14 +97,12 @@ class TLSScanner:
             validation_error = None
 
             try:
-                # Create SSL context with verification enabled
-                verify_context = ssl.create_default_context(cafile=CA_FILE)
-                verify_context.check_hostname = True
-                verify_context.verify_mode = ssl.CERT_REQUIRED
+                # Create SSL context with verification enabled (includes custom CAs)
+                verify_context = self._get_ca_context()
 
                 with socket.create_connection((host, port), timeout=self.timeout) as sock:
                     with verify_context.wrap_socket(sock, server_hostname=host) as secure_sock:
-                        # If we get here, cert is trusted by system CA store
+                        # If we get here, cert is trusted
                         is_trusted = True
                         logger.info(f"Certificate for {host}:{port} is trusted")
             except ssl.SSLCertVerificationError as e:

@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
-import { Plus, Server, Trash2, Edit2, Play } from 'lucide-react'
+import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle } from 'lucide-react'
 import { endpointService, scanService } from '../services/api'
+
+const API_BASE = '/api'
 
 export default function Endpoints() {
   const [endpoints, setEndpoints] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [editingEndpoint, setEditingEndpoint] = useState(null)
   const [scanning, setScanning] = useState({})
 
   const loadEndpoints = async () => {
@@ -83,6 +86,7 @@ export default function Endpoints() {
               endpoint={endpoint}
               onScan={() => handleScan(endpoint.id)}
               onDelete={() => handleDelete(endpoint.id)}
+              onEdit={() => setEditingEndpoint(endpoint)}
               scanning={scanning[endpoint.id]}
             />
           ))
@@ -99,11 +103,23 @@ export default function Endpoints() {
           }}
         />
       )}
+
+      {/* Edit Endpoint Modal */}
+      {editingEndpoint && (
+        <EditEndpointModal
+          endpoint={editingEndpoint}
+          onClose={() => setEditingEndpoint(null)}
+          onSuccess={() => {
+            setEditingEndpoint(null)
+            loadEndpoints()
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function EndpointCard({ endpoint, onScan, onDelete, scanning }) {
+function EndpointCard({ endpoint, onScan, onDelete, onEdit, scanning }) {
   const getCriticalityColor = (criticality) => {
     switch (criticality) {
       case 'critical': return 'bg-red-100 text-red-800 border-red-200'
@@ -129,6 +145,12 @@ function EndpointCard({ endpoint, onScan, onDelete, scanning }) {
             <p className="text-sm text-gray-500">Port {endpoint.port}</p>
           </div>
         </div>
+        <button
+          onClick={() => onEdit(endpoint)}
+          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+        >
+          <Edit2 className="w-4 h-4" />
+        </button>
       </div>
 
       <div className="space-y-3 mb-4">
@@ -136,12 +158,23 @@ function EndpointCard({ endpoint, onScan, onDelete, scanning }) {
           <span className="text-sm text-gray-600">Owner</span>
           <span className="text-sm font-medium">{endpoint.owner || 'Unassigned'}</span>
         </div>
-        
+
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-600">Criticality</span>
           <span className={`px-2 py-1 text-xs font-medium rounded ${getCriticalityColor(endpoint.criticality)}`}>
             {endpoint.criticality.toUpperCase()}
           </span>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-600">Webhook</span>
+          {endpoint.webhook_url ? (
+            <span className="flex items-center gap-1 text-sm text-green-600">
+              <Bell className="w-3 h-3" /> Configured
+            </span>
+          ) : (
+            <span className="text-sm text-gray-400">Not set</span>
+          )}
         </div>
 
         {lastScan && (
@@ -280,6 +313,158 @@ function AddEndpointModal({ onClose, onSuccess }) {
               className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
               {submitting ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function EditEndpointModal({ endpoint, onClose, onSuccess }) {
+  const [formData, setFormData] = useState({
+    owner: endpoint.owner || '',
+    criticality: endpoint.criticality || 'medium',
+    webhook_url: endpoint.webhook_url || '',
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [testingWebhook, setTestingWebhook] = useState(false)
+  const [webhookResult, setWebhookResult] = useState(null)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+
+    try {
+      setSubmitting(true)
+      await endpointService.update(endpoint.id, formData)
+      onSuccess()
+    } catch (error) {
+      console.error('Failed to update endpoint:', error)
+      alert('Failed to update endpoint')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleTestWebhook = async () => {
+    if (!formData.webhook_url) return
+
+    try {
+      setTestingWebhook(true)
+      setWebhookResult(null)
+
+      const response = await fetch(`${API_BASE}/webhooks/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webhook_url: formData.webhook_url,
+          message: `Test notification for ${endpoint.host}:${endpoint.port}`
+        })
+      })
+
+      const data = await response.json()
+      setWebhookResult(data)
+    } catch (error) {
+      setWebhookResult({ success: false, message: error.message })
+    } finally {
+      setTestingWebhook(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="p-6 border-b">
+          <h2 className="text-xl font-semibold">Edit Endpoint</h2>
+          <p className="text-sm text-gray-500 mt-1">{endpoint.host}:{endpoint.port}</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Owner
+            </label>
+            <input
+              type="text"
+              value={formData.owner}
+              onChange={(e) => setFormData({ ...formData, owner: e.target.value })}
+              placeholder="Team or person responsible"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Criticality
+            </label>
+            <select
+              value={formData.criticality}
+              onChange={(e) => setFormData({ ...formData, criticality: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Mattermost Webhook URL
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={formData.webhook_url}
+                onChange={(e) => {
+                  setFormData({ ...formData, webhook_url: e.target.value })
+                  setWebhookResult(null)
+                }}
+                placeholder="https://mattermost.example.com/hooks/..."
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleTestWebhook}
+                disabled={!formData.webhook_url || testingWebhook}
+                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
+              >
+                {testingWebhook ? 'Testing...' : 'Test'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Optional: Send notifications for this endpoint to a specific webhook
+            </p>
+
+            {webhookResult && (
+              <div className={`mt-2 p-2 rounded text-sm flex items-center gap-2 ${
+                webhookResult.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {webhookResult.success ? (
+                  <CheckCircle className="w-4 h-4" />
+                ) : (
+                  <XCircle className="w-4 h-4" />
+                )}
+                {webhookResult.message}
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {submitting ? 'Saving...' : 'Save'}
             </button>
           </div>
         </form>

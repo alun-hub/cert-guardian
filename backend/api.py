@@ -51,10 +51,21 @@ class EndpointCreate(BaseModel):
 class EndpointUpdate(BaseModel):
     owner: Optional[str] = None
     criticality: Optional[str] = None
+    webhook_url: Optional[str] = None
 
 
 class ScanRequest(BaseModel):
     endpoint_id: Optional[int] = None
+
+
+class TrustedCACreate(BaseModel):
+    name: str
+    pem_data: str
+
+
+class WebhookTest(BaseModel):
+    webhook_url: str
+    message: Optional[str] = "Test message from Certificate Guardian"
 
 
 class DashboardStats(BaseModel):
@@ -84,19 +95,25 @@ class CertificateInfo(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     global db, scanner, notifier, config
-    
+
     # Load config
     config_path = Path(__file__).parent.parent / "config" / "config.yaml"
     with open(config_path) as f:
         config = yaml.safe_load(f)
-    
+
     # Initialize database
     db_path = Path(__file__).parent.parent / config['database']['path']
     db = Database(str(db_path))
-    
-    # Initialize scanner
-    scanner = TLSScanner(timeout=config['scanner'].get('timeout_seconds', 10))
-    
+
+    # Load custom CAs from database
+    custom_ca_pems = db.get_all_trusted_ca_pems()
+
+    # Initialize scanner with custom CAs
+    scanner = TLSScanner(
+        timeout=config['scanner'].get('timeout_seconds', 10),
+        custom_ca_pems=custom_ca_pems
+    )
+
     # Initialize notifier
     webhook_url = config['mattermost']['webhook_url']
     if webhook_url and "your-mattermost" not in webhook_url:
@@ -337,30 +354,34 @@ async def create_endpoint(endpoint: EndpointCreate):
 async def update_endpoint(endpoint_id: int, update: EndpointUpdate):
     """Update endpoint information"""
     cursor = db.conn.cursor()
-    
+
     # Check if endpoint exists
     cursor.execute("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
     if not cursor.fetchone():
         raise HTTPException(status_code=404, detail="Endpoint not found")
-    
+
     # Update
     updates = []
     params = []
-    
+
     if update.owner is not None:
         updates.append("owner = ?")
         params.append(update.owner)
-    
+
     if update.criticality is not None:
         updates.append("criticality = ?")
         params.append(update.criticality)
-    
+
+    if update.webhook_url is not None:
+        updates.append("webhook_url = ?")
+        params.append(update.webhook_url if update.webhook_url else None)
+
     if updates:
         query = f"UPDATE endpoints SET {', '.join(updates)} WHERE id = ?"
         params.append(endpoint_id)
         cursor.execute(query, params)
         db.conn.commit()
-    
+
     return {"message": "Endpoint updated successfully"}
 
 
@@ -500,13 +521,125 @@ async def send_test_notification():
     """Send test notification to Mattermost"""
     if not notifier:
         raise HTTPException(status_code=400, detail="Mattermost not configured")
-    
+
     success = notifier.test_connection()
-    
+
     if success:
         return {"message": "Test notification sent successfully"}
     else:
         raise HTTPException(status_code=500, detail="Failed to send notification")
+
+
+# Test webhook URL
+@app.post("/api/webhooks/test")
+async def test_webhook(request: WebhookTest):
+    """Test a webhook URL"""
+    import requests
+
+    try:
+        payload = {
+            "text": request.message,
+            "username": "Certificate Guardian",
+            "icon_emoji": ":lock:"
+        }
+        response = requests.post(request.webhook_url, json=payload, timeout=10)
+
+        if response.status_code == 200:
+            return {"success": True, "message": "Webhook test successful"}
+        else:
+            return {"success": False, "message": f"Webhook returned status {response.status_code}"}
+    except requests.exceptions.Timeout:
+        return {"success": False, "message": "Webhook request timed out"}
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "message": f"Webhook error: {str(e)}"}
+
+
+# ===== Trusted CA Management =====
+
+@app.get("/api/trusted-cas")
+async def get_trusted_cas():
+    """Get all trusted CA certificates"""
+    cas = db.get_all_trusted_cas()
+    return {"trusted_cas": cas, "total": len(cas)}
+
+
+@app.post("/api/trusted-cas")
+async def add_trusted_ca(ca: TrustedCACreate):
+    """Add a trusted CA certificate"""
+    import hashlib
+    from cryptography import x509
+    from cryptography.hazmat.backends import default_backend
+
+    try:
+        # Parse the PEM certificate
+        pem_data = ca.pem_data.strip()
+        if not pem_data.startswith("-----BEGIN CERTIFICATE-----"):
+            raise HTTPException(status_code=400, detail="Invalid PEM format")
+
+        cert = x509.load_pem_x509_certificate(pem_data.encode(), default_backend())
+
+        # Extract certificate info
+        fingerprint = hashlib.sha256(cert.public_bytes(
+            encoding=x509.base.serialization.Encoding.DER
+        )).hexdigest()
+
+        subject_parts = []
+        for attr in cert.subject:
+            subject_parts.append(f"{attr.oid._name}={attr.value}")
+        subject = ", ".join(subject_parts)
+
+        issuer_parts = []
+        for attr in cert.issuer:
+            issuer_parts.append(f"{attr.oid._name}={attr.value}")
+        issuer = ", ".join(issuer_parts)
+
+        not_after = cert.not_valid_after_utc.isoformat()
+
+        # Add to database
+        ca_id = db.add_trusted_ca(
+            name=ca.name,
+            pem_data=pem_data,
+            fingerprint=fingerprint,
+            subject=subject,
+            issuer=issuer,
+            not_after=not_after
+        )
+
+        # Refresh scanner's CA list
+        scanner.set_custom_cas(db.get_all_trusted_ca_pems())
+
+        return {
+            "id": ca_id,
+            "fingerprint": fingerprint,
+            "subject": subject,
+            "message": "Trusted CA added successfully"
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid certificate: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing certificate: {str(e)}")
+
+
+@app.delete("/api/trusted-cas/{ca_id}")
+async def delete_trusted_ca(ca_id: int):
+    """Delete a trusted CA certificate"""
+    if db.delete_trusted_ca(ca_id):
+        # Refresh scanner's CA list
+        scanner.set_custom_cas(db.get_all_trusted_ca_pems())
+        return {"message": "Trusted CA deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Trusted CA not found")
+
+
+@app.get("/api/trusted-cas/{ca_id}/pem")
+async def get_trusted_ca_pem(ca_id: int):
+    """Get PEM data for a trusted CA"""
+    pem = db.get_trusted_ca_pem(ca_id)
+    if pem:
+        return {"pem_data": pem}
+    else:
+        raise HTTPException(status_code=404, detail="Trusted CA not found")
 
 
 if __name__ == "__main__":

@@ -49,7 +49,28 @@ class Database:
                 port INTEGER NOT NULL,
                 owner TEXT,
                 criticality TEXT DEFAULT 'medium',
+                webhook_url TEXT,
                 UNIQUE(host, port)
+            )
+        """)
+
+        # Try to add webhook_url column if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE endpoints ADD COLUMN webhook_url TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Trusted CAs table (custom root certificates)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trusted_cas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                pem_data TEXT NOT NULL,
+                fingerprint TEXT UNIQUE NOT NULL,
+                subject TEXT NOT NULL,
+                issuer TEXT NOT NULL,
+                not_after TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         
@@ -251,6 +272,64 @@ class Database:
         cursor.execute(query)
         return [dict(row) for row in cursor.fetchall()]
     
+    def add_trusted_ca(self, name: str, pem_data: str, fingerprint: str,
+                       subject: str, issuer: str, not_after: str) -> int:
+        """Add a trusted CA certificate"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+
+        cursor.execute("""
+            INSERT INTO trusted_cas (name, pem_data, fingerprint, subject, issuer, not_after, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(fingerprint) DO UPDATE SET
+                name = excluded.name,
+                pem_data = excluded.pem_data
+        """, (name, pem_data, fingerprint, subject, issuer, not_after, now))
+        self.conn.commit()
+
+        cursor.execute("SELECT id FROM trusted_cas WHERE fingerprint = ?", (fingerprint,))
+        return cursor.fetchone()[0]
+
+    def get_all_trusted_cas(self) -> List[Dict]:
+        """Get all trusted CA certificates"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, name, fingerprint, subject, issuer, not_after, created_at FROM trusted_cas")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_trusted_ca_pem(self, ca_id: int) -> Optional[str]:
+        """Get PEM data for a specific CA"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT pem_data FROM trusted_cas WHERE id = ?", (ca_id,))
+        row = cursor.fetchone()
+        return row['pem_data'] if row else None
+
+    def get_all_trusted_ca_pems(self) -> List[str]:
+        """Get all trusted CA PEM data for building trust store"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT pem_data FROM trusted_cas")
+        return [row['pem_data'] for row in cursor.fetchall()]
+
+    def delete_trusted_ca(self, ca_id: int) -> bool:
+        """Delete a trusted CA"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM trusted_cas WHERE id = ?", (ca_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def update_endpoint_webhook(self, endpoint_id: int, webhook_url: Optional[str]) -> bool:
+        """Update endpoint's webhook URL"""
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE endpoints SET webhook_url = ? WHERE id = ?", (webhook_url, endpoint_id))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_endpoint_webhook(self, endpoint_id: int) -> Optional[str]:
+        """Get endpoint's webhook URL"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT webhook_url FROM endpoints WHERE id = ?", (endpoint_id,))
+        row = cursor.fetchone()
+        return row['webhook_url'] if row else None
+
     def close(self):
         """Close database connection"""
         if self.conn:
