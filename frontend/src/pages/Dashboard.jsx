@@ -8,14 +8,15 @@ import {
   Shield,
   AlertOctagon
 } from 'lucide-react'
-import { 
-  LineChart, 
-  Line, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Cell
 } from 'recharts'
 import { dashboardService, certificateService, scanService } from '../services/api'
 
@@ -120,21 +121,33 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Expiry Timeline */}
         <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-semibold mb-4">Expiry Timeline</h2>
+          <h2 className="text-lg font-semibold mb-4">Certificate Expiry Timeline</h2>
+          <p className="text-sm text-gray-500 mb-4">Certificates expiring per month</p>
           <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={timeline}>
+            <BarChart data={timeline}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip />
-              <Line 
-                type="monotone" 
-                dataKey="count" 
-                stroke="#3b82f6" 
-                strokeWidth={2}
-                name="Expiring Certificates"
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 12 }}
+                interval={0}
+                angle={-45}
+                textAnchor="end"
+                height={60}
               />
-            </LineChart>
+              <YAxis allowDecimals={false} />
+              <Tooltip
+                formatter={(value) => [value, 'Certificates']}
+                labelFormatter={(label) => `Month: ${label}`}
+              />
+              <Bar dataKey="count" name="Expiring">
+                {timeline.map((entry, index) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={entry.count > 0 ? (index === 0 ? '#ef4444' : index < 3 ? '#f59e0b' : '#3b82f6') : '#e5e7eb'}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
           </ResponsiveContainer>
         </div>
 

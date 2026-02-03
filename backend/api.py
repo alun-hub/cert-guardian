@@ -446,9 +446,10 @@ async def trigger_scan(background_tasks: BackgroundTasks, request: ScanRequest):
 async def get_expiry_timeline(months: int = 12):
     """Get certificate expiry timeline"""
     cursor = db.conn.cursor()
-    
+
+    # Get certificates grouped by month
     cursor.execute("""
-        SELECT 
+        SELECT
             strftime('%Y-%m', not_after) as month,
             COUNT(*) as count
         FROM certificates
@@ -457,9 +458,25 @@ async def get_expiry_timeline(months: int = 12):
         GROUP BY month
         ORDER BY month
     """, (months * 30,))
-    
-    timeline = [{"month": row[0], "count": row[1]} for row in cursor.fetchall()]
-    
+
+    cert_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Generate all months in range and fill with 0 if no certs
+    from datetime import datetime
+    from dateutil.relativedelta import relativedelta
+
+    timeline = []
+    current = datetime.now()
+    for i in range(months):
+        month_str = current.strftime('%Y-%m')
+        month_label = current.strftime('%b %Y')
+        timeline.append({
+            "month": month_str,
+            "label": month_label,
+            "count": cert_counts.get(month_str, 0)
+        })
+        current = current + relativedelta(months=1)
+
     return {"timeline": timeline}
 
 
