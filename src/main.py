@@ -218,7 +218,7 @@ class CertificateGuardian:
         self.scan_all_endpoints()
         logger.info("=== Scan cycle complete ===")
     
-    def run_continuous(self)::
+    def run_continuous(self):
         """Run continuous monitoring"""
         interval = self.config['scanner'].get('interval_seconds', 3600)
         logger.info(f"Starting continuous monitoring (interval: {interval}s)")
