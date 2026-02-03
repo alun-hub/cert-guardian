@@ -106,7 +106,7 @@ class Database:
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
         san_json = json.dumps(san_list) if san_list else None
-        
+
         cursor.execute("""
             INSERT INTO certificates (
                 fingerprint, subject, issuer, not_before, not_after,
@@ -124,7 +124,10 @@ class Database:
               serial_number, san_json, int(is_self_signed), int(is_trusted_ca),
               validation_error, chain_length, now, now))
         self.conn.commit()
-        return cursor.lastrowid
+
+        # Get the actual certificate ID (lastrowid is unreliable with ON CONFLICT)
+        cursor.execute("SELECT id FROM certificates WHERE fingerprint = ?", (fingerprint,))
+        return cursor.fetchone()[0]
     
     def add_scan(self, certificate_id: int, endpoint_id: int, 
                  status: str, error_message: str = None) -> int:
