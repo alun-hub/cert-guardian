@@ -17,14 +17,7 @@ class Database:
 
     def _init_db(self):
         """Initialize database schema"""
-        # Check if database file needs to be created
-        db_exists = os.path.exists(self.db_path)
-
         self.conn = sqlite3.connect(self.db_path)
-
-        # Set permissions to 666 for new databases (needed for Podman rootless)
-        if not db_exists and os.path.exists(self.db_path):
-            os.chmod(self.db_path, 0o666)
         self.conn.row_factory = sqlite3.Row
         
         cursor = self.conn.cursor()
@@ -143,6 +136,46 @@ class Database:
                 scanned_at TEXT NOT NULL,
                 FOREIGN KEY (sweep_id) REFERENCES sweeps(id),
                 FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
+            )
+        """)
+
+        # Users table (for local auth mode)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT,
+                password_hash TEXT NOT NULL,
+                role TEXT DEFAULT 'viewer',
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        # Refresh tokens table (for remember me functionality)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT UNIQUE NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Audit log table (for tracking user actions)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_email TEXT NOT NULL,
+                action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id INTEGER,
+                details TEXT,
+                ip_address TEXT,
+                created_at TEXT NOT NULL
             )
         """)
 
@@ -473,6 +506,174 @@ class Database:
         cursor.execute("DELETE FROM sweeps WHERE id = ?", (sweep_id,))
         self.conn.commit()
         return cursor.rowcount > 0
+
+    # ==================== User Methods ====================
+
+    def create_user(self, username: str, password_hash: str, email: str = None,
+                    role: str = "viewer") -> int:
+        """Create a new user"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+
+        cursor.execute("""
+            INSERT INTO users (username, email, password_hash, role, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (username, email, password_hash, role, now, now))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        """Get user by username"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """Get user by ID"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_all_users(self) -> List[Dict]:
+        """Get all users (without password hashes)"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, role, is_active, created_at, updated_at
+            FROM users ORDER BY username
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_user(self, user_id: int, email: str = None, role: str = None,
+                    is_active: bool = None) -> bool:
+        """Update user details"""
+        cursor = self.conn.cursor()
+        updates = ["updated_at = ?"]
+        params = [datetime.utcnow().isoformat()]
+
+        if email is not None:
+            updates.append("email = ?")
+            params.append(email)
+        if role is not None:
+            updates.append("role = ?")
+            params.append(role)
+        if is_active is not None:
+            updates.append("is_active = ?")
+            params.append(int(is_active))
+
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, params)
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def update_user_password(self, user_id: int, password_hash: str) -> bool:
+        """Update user's password"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?
+        """, (password_hash, now, user_id))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_user(self, user_id: int) -> bool:
+        """Delete a user (also deletes their refresh tokens via CASCADE)"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def count_users(self) -> int:
+        """Count total users"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) as count FROM users")
+        return cursor.fetchone()['count']
+
+    # ==================== Refresh Token Methods ====================
+
+    def store_refresh_token(self, user_id: int, token_hash: str, expires_at: str) -> int:
+        """Store a refresh token"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+
+        cursor.execute("""
+            INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, token_hash, expires_at, now))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_refresh_token(self, token_hash: str) -> Optional[Dict]:
+        """Get refresh token by hash"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT rt.*, u.username, u.role, u.is_active
+            FROM refresh_tokens rt
+            JOIN users u ON rt.user_id = u.id
+            WHERE rt.token_hash = ?
+        """, (token_hash,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def delete_refresh_token(self, token_hash: str) -> bool:
+        """Delete a specific refresh token (logout)"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM refresh_tokens WHERE token_hash = ?", (token_hash,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_user_refresh_tokens(self, user_id: int) -> int:
+        """Delete all refresh tokens for a user (logout all sessions)"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+        return cursor.rowcount
+
+    def cleanup_expired_tokens(self) -> int:
+        """Remove expired refresh tokens"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("DELETE FROM refresh_tokens WHERE expires_at < ?", (now,))
+        self.conn.commit()
+        return cursor.rowcount
+
+    # ==================== Audit Log Methods ====================
+
+    def add_audit_log(self, user_email: str, action: str, resource_type: str = None,
+                      resource_id: int = None, details: str = None,
+                      ip_address: str = None) -> int:
+        """Add an audit log entry"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+
+        cursor.execute("""
+            INSERT INTO audit_log (user_email, action, resource_type, resource_id, details, ip_address, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_email, action, resource_type, resource_id, details, ip_address, now))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_audit_logs(self, limit: int = 100, offset: int = 0,
+                       user_email: str = None, action: str = None) -> List[Dict]:
+        """Get audit log entries with optional filters"""
+        cursor = self.conn.cursor()
+        query = "SELECT * FROM audit_log WHERE 1=1"
+        params = []
+
+        if user_email:
+            query += " AND user_email = ?"
+            params.append(user_email)
+        if action:
+            query += " AND action = ?"
+            params.append(action)
+
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
 
     def close(self):
         """Close database connection"""

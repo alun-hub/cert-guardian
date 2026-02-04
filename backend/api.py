@@ -2,12 +2,14 @@
 """
 Certificate Guardian - FastAPI Backend
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import sys
+import logging
 from pathlib import Path
 
 # Add parent directory to path
@@ -16,13 +18,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from database import Database
 from scanner import TLSScanner
 from notifier import MattermostNotifier
+from auth import AuthManager, User, LocalAuthProvider
 import yaml
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Certificate Guardian API",
     description="API for monitoring TLS certificate expiry",
-    version="1.0.0"
+    version="1.2.0"
 )
+
+security = HTTPBearer(auto_error=False)
 
 # CORS middleware
 app.add_middleware(
@@ -38,6 +45,7 @@ db: Optional[Database] = None
 scanner: Optional[TLSScanner] = None
 notifier: Optional[MattermostNotifier] = None
 config: Optional[Dict] = None
+auth_manager: Optional[AuthManager] = None
 
 
 # Pydantic models
@@ -68,6 +76,35 @@ class WebhookTest(BaseModel):
     message: Optional[str] = "Test message from Certificate Guardian"
 
 
+# ===== Auth Models =====
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    email: Optional[str] = None
+    role: str = "viewer"
+
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class DashboardStats(BaseModel):
     total_certificates: int
     total_endpoints: int
@@ -94,7 +131,7 @@ class CertificateInfo(BaseModel):
 # Initialize
 @app.on_event("startup")
 async def startup_event():
-    global db, scanner, notifier, config
+    global db, scanner, notifier, config, auth_manager
 
     # Load config
     config_path = Path(__file__).parent.parent / "config" / "config.yaml"
@@ -123,11 +160,325 @@ async def startup_event():
             icon_emoji=config['mattermost'].get('icon_emoji', ':lock:')
         )
 
+    # Initialize authentication
+    auth_config = config.get('auth', {'mode': 'local'})
+    auth_manager = AuthManager(db, auth_config)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     if db:
         db.close()
+
+
+# ===== Auth Dependencies =====
+
+async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Optional[User]:
+    """Get current user from request. Returns None if not authenticated."""
+    if not auth_manager:
+        return None
+    return await auth_manager.authenticate(request)
+
+
+async def require_auth(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> User:
+    """Require authentication. Raises 401 if not authenticated."""
+    user = await get_current_user(request, credentials)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    return user
+
+
+async def require_editor(user: User = Depends(require_auth)) -> User:
+    """Require editor role or higher."""
+    if not user.has_role("editor"):
+        raise HTTPException(status_code=403, detail="Editor role required")
+    return user
+
+
+async def require_admin(user: User = Depends(require_auth)) -> User:
+    """Require admin role."""
+    if not user.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    return user
+
+
+# ===== Auth Endpoints =====
+
+@app.get("/api/auth/mode")
+async def get_auth_mode():
+    """Get current authentication mode"""
+    if not auth_manager:
+        return {"mode": "none", "message": "Authentication not configured"}
+    return {"mode": auth_manager.get_mode()}
+
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest, response: Response):
+    """Login with username/password (local mode only)"""
+    if not auth_manager:
+        raise HTTPException(status_code=500, detail="Authentication not configured")
+
+    if auth_manager.get_mode() != "local":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Login endpoint not available in {auth_manager.get_mode()} mode"
+        )
+
+    result = auth_manager.login(request.username, request.password)
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # Set refresh token as httpOnly cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=result["refresh_token"],
+        httponly=True,
+        secure=False,  # Set to True in production with HTTPS
+        samesite="lax",
+        max_age=30 * 24 * 60 * 60  # 30 days
+    )
+
+    # Don't include refresh token in response body
+    return {
+        "access_token": result["access_token"],
+        "token_type": result["token_type"],
+        "expires_in": result["expires_in"],
+        "user": result["user"]
+    }
+
+
+@app.post("/api/auth/refresh")
+async def refresh_token(
+    request: Request,
+    response: Response,
+    body: Optional[TokenRefreshRequest] = None
+):
+    """Refresh access token using refresh token"""
+    if not auth_manager:
+        raise HTTPException(status_code=500, detail="Authentication not configured")
+
+    if auth_manager.get_mode() != "local":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Token refresh not available in {auth_manager.get_mode()} mode"
+        )
+
+    # Get refresh token from cookie or body
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token and body:
+        refresh_token = body.refresh_token
+
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token required")
+
+    result = auth_manager.refresh(refresh_token)
+    if not result:
+        # Clear invalid cookie
+        response.delete_cookie("refresh_token")
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    return result
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response):
+    """Logout and revoke refresh token"""
+    if auth_manager and auth_manager.get_mode() == "local":
+        refresh_token = request.cookies.get("refresh_token")
+        if refresh_token:
+            auth_manager.logout(refresh_token)
+
+    response.delete_cookie("refresh_token")
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/api/auth/me")
+async def get_current_user_info(user: User = Depends(require_auth)):
+    """Get current authenticated user info"""
+    return user.to_dict()
+
+
+# ===== User Management Endpoints (Admin only) =====
+
+@app.get("/api/users")
+async def list_users(admin: User = Depends(require_admin)):
+    """List all users (admin only)"""
+    users = db.get_all_users()
+    return {"users": users, "total": len(users)}
+
+
+@app.post("/api/users")
+async def create_user(user_data: UserCreate, admin: User = Depends(require_admin)):
+    """Create a new user (admin only)"""
+    if auth_manager.get_mode() != "local":
+        raise HTTPException(
+            status_code=400,
+            detail="User creation only available in local auth mode"
+        )
+
+    # Check if username already exists
+    existing = db.get_user_by_username(user_data.username)
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # Validate role
+    valid_roles = ["viewer", "editor", "admin"]
+    if user_data.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+
+    # Hash password and create user
+    password_hash = auth_manager.hash_password(user_data.password)
+    user_id = db.create_user(
+        username=user_data.username,
+        password_hash=password_hash,
+        email=user_data.email or f"{user_data.username}@local",
+        role=user_data.role
+    )
+
+    return {"id": user_id, "message": "User created successfully"}
+
+
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int, admin: User = Depends(require_admin)):
+    """Get user details (admin only)"""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/api/users/{user_id}")
+async def update_user(
+    user_id: int,
+    update: UserUpdate,
+    admin: User = Depends(require_admin)
+):
+    """Update user (admin only)"""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Prevent deactivating the last admin
+    if update.is_active is False or (update.role and update.role != "admin"):
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")
+        admin_count = cursor.fetchone()[0]
+        if admin_count <= 1 and user['role'] == 'admin':
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot deactivate or demote the last admin user"
+            )
+
+    # Build update
+    updates = {}
+    if update.email is not None:
+        updates['email'] = update.email
+    if update.role is not None:
+        valid_roles = ["viewer", "editor", "admin"]
+        if update.role not in valid_roles:
+            raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+        updates['role'] = update.role
+    if update.is_active is not None:
+        updates['is_active'] = 1 if update.is_active else 0
+
+    if updates:
+        db.update_user(user_id, **updates)
+
+    return {"message": "User updated successfully"}
+
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: int, admin: User = Depends(require_admin)):
+    """Delete user (admin only)"""
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Prevent deleting the last admin
+    if user['role'] == 'admin':
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")
+        admin_count = cursor.fetchone()[0]
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the last admin user"
+            )
+
+    # Prevent self-deletion
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    db.delete_user(user_id)
+    return {"message": "User deleted successfully"}
+
+
+class PasswordReset(BaseModel):
+    new_password: str
+
+
+@app.post("/api/users/{user_id}/password")
+async def reset_user_password(
+    user_id: int,
+    request: PasswordReset,
+    admin: User = Depends(require_admin)
+):
+    """Reset user password (admin only)"""
+    if auth_manager.get_mode() != "local":
+        raise HTTPException(
+            status_code=400,
+            detail="Password reset only available in local auth mode"
+        )
+
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    password_hash = auth_manager.hash_password(request.new_password)
+    db.update_user_password(user_id, password_hash)
+
+    return {"message": "Password reset successfully"}
+
+
+@app.post("/api/auth/change-password")
+async def change_own_password(
+    request: PasswordChange,
+    user: User = Depends(require_auth)
+):
+    """Change own password"""
+    if auth_manager.get_mode() != "local":
+        raise HTTPException(
+            status_code=400,
+            detail="Password change only available in local auth mode"
+        )
+
+    # Verify current password
+    user_data = db.get_user_by_id(user.id)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    provider = auth_manager.provider
+    if isinstance(provider, LocalAuthProvider):
+        if not provider.verify_password(request.current_password, user_data['password_hash']):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+        # Update password
+        new_hash = provider.hash_password(request.new_password)
+        db.update_user_password(user.id, new_hash)
+
+        return {"message": "Password changed successfully"}
+
+    raise HTTPException(status_code=400, detail="Password change not supported")
 
 
 # Health check
