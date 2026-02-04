@@ -2,13 +2,13 @@
 
 Full-featured web application for monitoring TLS certificate expiry with a modern React frontend and FastAPI backend.
 
-## 🎨 Features
+## Features
 
 ### Dashboard
 - **Real-time Statistics** - Total certificates, expiring soon, self-signed, untrusted
 - **Expiry Timeline Chart** - Visualize when certificates expire over time
 - **Urgent Alerts** - Quick view of certificates expiring soon
-- **One-Click Scanning** - Trigger manual scans from the UI
+- **One-Click Scanning** - Trigger manual scans from the UI (editor+)
 
 ### Certificates View
 - **Comprehensive List** - All monitored certificates with status
@@ -18,7 +18,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Trust Validation** - See which certs are self-signed or untrusted
 
 ### Endpoints Management
-- **Add/Remove Endpoints** - Full CRUD operations
+- **Add/Remove Endpoints** - Full CRUD operations (editor+)
 - **Per-Endpoint Scanning** - Scan individual endpoints on demand
 - **Criticality Levels** - Mark endpoints as low/medium/high/critical
 - **Owner Assignment** - Track responsibility for each endpoint
@@ -27,7 +27,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Sortable Columns** - Sort by any column
 
 ### Network Sweeps
-- **IP Range Scanning** - Discover TLS endpoints in your network
+- **IP Range Scanning** - Discover TLS endpoints in your network (editor+)
 - **CIDR Support** - Use notation like `192.168.1.0/24`
 - **Range Support** - Use notation like `10.0.0.1-50`
 - **Custom Ports** - Scan port 443 and additional ports
@@ -35,52 +35,81 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Progress Tracking** - Real-time progress during sweep
 - **Batch Configuration** - Set owner, criticality, webhook for all discovered endpoints
 
-### Security Dashboard
-- **Security Issues Overview** - Self-signed and untrusted certificates
-- **Detailed Recommendations** - Action items for each issue
-- **Validation Errors** - See exactly what's wrong with each cert
+### Settings
+- **Custom CA Management** - Add trusted root CAs for internal PKI (editor+)
+- **CA Upload** - Upload PEM files or paste certificate data
+- **Trust Verification** - Certificates signed by custom CAs show as trusted
 
-## 🏗️ Architecture
+### User Management (Admin)
+- **User List** - View all users with roles
+- **Create Users** - Add new users with role assignment
+- **Edit Users** - Change roles, deactivate accounts
+- **Audit Logs** - View all user actions and changes
+
+## Role-Based Access Control
+
+| Feature | Viewer | Editor | Admin |
+|---------|--------|--------|-------|
+| View dashboard & stats | Yes | Yes | Yes |
+| View certificates | Yes | Yes | Yes |
+| View endpoints | Yes | Yes | Yes |
+| Create/edit endpoints | No | Yes | Yes |
+| Trigger scans | No | Yes | Yes |
+| Run network sweeps | No | Yes | Yes |
+| Manage trusted CAs | No | Yes | Yes |
+| Manage users | No | No | Yes |
+| View audit logs | No | No | Yes |
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│              React Frontend (Vite)              │
-│  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │
-│  │Dashboard │ │  Certs   │ │   Endpoints    │ │
-│  └──────────┘ └──────────┘ └────────────────┘ │
-│  ┌──────────┐ ┌──────────────────────────────┐ │
-│  │ Security │ │     API Service Layer        │ │
-│  └──────────┘ └──────────────────────────────┘ │
-└────────────────────┬────────────────────────────┘
-                     │ HTTP/REST
-┌────────────────────┴────────────────────────────┐
-│            FastAPI Backend (Python)             │
-│  ┌──────────────────────────────────────────┐  │
-│  │  REST API Endpoints                      │  │
-│  ├──────────────────────────────────────────┤  │
-│  │  Database Layer (SQLite)                 │  │
-│  ├──────────────────────────────────────────┤  │
-│  │  TLS Scanner + Notifier                  │  │
-│  └──────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|              React Frontend (Vite)                  |
+|  +----------+ +----------+ +----------------+       |
+|  |Dashboard | |  Certs   | |   Endpoints    |       |
+|  +----------+ +----------+ +----------------+       |
+|  +----------+ +----------+ +----------------+       |
+|  | Security | | Settings | |     Users      |       |
+|  +----------+ +----------+ +----------------+       |
+|  +--------------------------------------------+    |
+|  |     AuthContext + API Service Layer        |    |
+|  +--------------------------------------------+    |
++-------------------------+---------------------------+
+                          | HTTP/REST + JWT
++-------------------------+---------------------------+
+|            FastAPI Backend (Python)                 |
+|  +----------------------------------------------+  |
+|  |  Auth (Local/Pomerium/Keycloak)              |  |
+|  +----------------------------------------------+  |
+|  |  REST API Endpoints                          |  |
+|  +----------------------------------------------+  |
+|  |  Database Layer (SQLite)                     |  |
+|  +----------------------------------------------+  |
+|  |  TLS Scanner + Notifier                      |  |
+|  +----------------------------------------------+  |
++-----------------------------------------------------+
 ```
 
 ## Quick Start
 
-### Option 1: Podman Compose (Rekommenderad)
+### Option 1: Podman Compose (Recommended)
 
 ```bash
-# Konfigurera
+# Configure
 cp config/config.yaml.example config/config.yaml
 nano config/config.yaml
 
-# Bygg och starta
+# Build and start
 podman-compose -f docker-compose-webapp.yaml up -d
 
-# Åtkomst:
+# Access:
 # Frontend: http://localhost:3000
 # Backend API: http://localhost:8000
 # API Docs: http://localhost:8000/docs
+
+# Default login (local mode):
+# Username: admin
+# Password: admin
 ```
 
 ### Option 2: Development Mode
@@ -102,72 +131,69 @@ npm run dev
 # http://localhost:3000
 ```
 
-## 📡 API Documentation
+## Authentication
 
-### Endpoints
+Certificate Guardian supports three authentication modes:
 
-**Dashboard:**
-- `GET /api/dashboard/stats` - Get dashboard statistics
-- `GET /api/timeline?months=12` - Get expiry timeline
+### Local Mode (Default)
+Built-in user management with JWT tokens.
 
-**Certificates:**
-- `GET /api/certificates` - List all certificates
-  - Query params: `expiring_days`, `self_signed`, `untrusted`, `limit`, `offset`
-- `GET /api/certificates/{id}` - Get certificate details
+```yaml
+auth:
+  mode: "local"
+  local:
+    access_token_expire_minutes: 15
+    refresh_token_expire_days: 30
+```
 
-**Endpoints:**
-- `GET /api/endpoints` - List all endpoints
-- `POST /api/endpoints` - Create new endpoint
-- `PUT /api/endpoints/{id}` - Update endpoint
-- `DELETE /api/endpoints/{id}` - Delete endpoint
+### Pomerium (Proxy Auth)
+Use Pomerium as identity-aware proxy.
 
-**Scanning:**
-- `POST /api/scan` - Trigger scan
-  - Body: `{"endpoint_id": 1}` or `{"endpoint_id": null}` for all
+```yaml
+auth:
+  mode: "proxy"
+  proxy:
+    jwks_url: "https://authenticate.example.com/.well-known/pomerium/jwks.json"
+    admin_groups: ["cert-admins@example.com"]
+    editor_groups: ["cert-editors@example.com"]
+```
 
-**Network Sweeps:**
-- `GET /api/sweeps` - List all sweeps
-- `POST /api/sweeps` - Create and start a new sweep
-  - Body: `{"name": "Office Network", "target": "192.168.1.0/24", "ports": [443, 8443], "owner": "IT", "criticality": "medium"}`
-- `GET /api/sweeps/{id}` - Get sweep details with results
-- `DELETE /api/sweeps/{id}` - Delete a sweep
-- `POST /api/sweeps/validate` - Validate target and get IP count
-  - Body: `{"target": "10.0.0.0/24"}`
+### Keycloak (OIDC)
+Enterprise SSO with Keycloak or other OIDC providers.
 
-**Security:**
-- `GET /api/security/issues` - Get all security issues
+```yaml
+auth:
+  mode: "oidc"
+  oidc:
+    issuer: "https://keycloak.example.com/realms/myrealm"
+    client_id: "cert-guardian"
+    client_secret: "your-client-secret"
+    admin_groups: ["cert-admin"]
+    editor_groups: ["cert-editor"]
+```
 
-**Webhooks:**
-- `POST /api/webhooks/test` - Test a webhook URL
-  - Body: `{"webhook_url": "https://...", "message": "Test"}`
+See [AUTHENTICATION.md](AUTHENTICATION.md) for detailed setup instructions.
 
-**Health:**
-- `GET /health` - Health check
+## API Documentation
 
-### Interactive API Docs
+Full API reference available at:
+- Interactive docs: `http://localhost:8000/docs`
+- Documentation: [API.md](API.md)
 
-Visit `http://localhost:8000/docs` for interactive Swagger UI documentation.
+### Key Endpoints
 
-## 🎨 Frontend Tech Stack
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | /api/dashboard/stats | Any | Dashboard statistics |
+| GET | /api/certificates | Any | List certificates |
+| GET | /api/endpoints | Any | List endpoints |
+| POST | /api/endpoints | Editor+ | Create endpoint |
+| POST | /api/scan | Editor+ | Trigger scan |
+| POST | /api/sweeps | Editor+ | Start network sweep |
+| GET | /api/users | Admin | List users |
+| GET | /api/audit-logs | Admin | View audit logs |
 
-- **React 18** - UI framework
-- **React Router** - Client-side routing
-- **Axios** - HTTP client
-- **Recharts** - Charts and data visualization
-- **Tailwind CSS** - Styling
-- **Lucide React** - Icons
-- **Vite** - Build tool
-- **date-fns** - Date formatting
-
-## ⚙️ Backend Tech Stack
-
-- **FastAPI** - Modern Python web framework
-- **Uvicorn** - ASGI server
-- **Pydantic** - Data validation
-- **SQLite** - Database
-- **Existing Scanner/Notifier** - Reuses core Certificate Guardian code
-
-## 🔧 Configuration
+## Configuration
 
 ### Backend Configuration
 
@@ -185,6 +211,12 @@ mattermost:
 scanner:
   interval_seconds: 3600
   timeout_seconds: 10
+
+auth:
+  mode: "local"
+  local:
+    access_token_expire_minutes: 15
+    refresh_token_expire_days: 30
 ```
 
 ### Frontend Configuration
@@ -195,7 +227,7 @@ For production, set environment variable:
 VITE_API_URL=https://your-api-domain.com
 ```
 
-## 🐳 Deployment
+## Deployment
 
 ### Docker Compose
 
@@ -210,35 +242,7 @@ docker-compose -f docker-compose-webapp.yaml logs -f
 docker-compose -f docker-compose-webapp.yaml down
 ```
 
-### Kubernetes
-
-Create deployments for:
-1. Backend (FastAPI)
-2. Frontend (Nginx)
-3. Scanner (Cron job)
-
-Example:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: cert-guardian-backend
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: cert-guardian-backend
-  template:
-    spec:
-      containers:
-      - name: backend
-        image: cert-guardian-backend:latest
-        ports:
-        - containerPort: 8000
-```
-
-### Reverse Proxy (Nginx/Traefik)
+### Reverse Proxy (Nginx)
 
 ```nginx
 server {
@@ -256,84 +260,66 @@ server {
     # Backend API
     location /api {
         proxy_pass http://localhost:8000;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
     }
 }
 ```
 
-## 🔒 Security Considerations
-
-### Authentication
-
-**Not Included by Default.** For production, add:
-
-1. **OAuth2/OIDC** - Integrate with your SSO
-2. **JWT Tokens** - For API authentication
-3. **RBAC** - Role-based access control
-
-Example FastAPI middleware:
-
-```python
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer
-
-security = HTTPBearer()
-
-async def verify_token(credentials = Depends(security)):
-    # Verify JWT token
-    pass
-
-@app.get("/api/protected", dependencies=[Depends(verify_token)])
-async def protected_route():
-    pass
-```
+## Security Considerations
 
 ### HTTPS
-
-Always use HTTPS in production:
-- Let's Encrypt for free SSL certificates
-- Cloudflare for SSL proxy
-- Cloud provider load balancers with SSL termination
+Always use HTTPS in production. Configure via:
+- Reverse proxy (nginx, Traefik)
+- Cloud load balancer
+- Let's Encrypt
 
 ### CORS
-
-Update backend `api.py`:
+Update backend for production:
 
 ```python
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://your-domain.com"],  # Specify your domain
+    allow_origins=["https://your-domain.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 ```
 
-## 📊 Monitoring
+### Audit Logging
+All modifications are logged:
+- Who performed the action
+- What was changed
+- When it happened
+- Client IP address
 
-### Application Monitoring
-
+View audit logs via Admin -> Audit Logs or API:
 ```bash
-# Backend health
-curl http://localhost:8000/health
-
-# Check logs
-docker logs cert-guardian-backend -f
-docker logs cert-guardian-frontend -f
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/audit-logs
 ```
 
-### Metrics
+## Tech Stack
 
-Add Prometheus metrics:
+### Frontend
+- **React 18** - UI framework
+- **React Router** - Client-side routing
+- **Axios** - HTTP client
+- **Recharts** - Charts and data visualization
+- **Tailwind CSS** - Styling
+- **Lucide React** - Icons
+- **Vite** - Build tool
 
-```python
-from prometheus_client import Counter, Histogram
-from prometheus_fastapi_instrumentator import Instrumentator
+### Backend
+- **FastAPI** - Modern Python web framework
+- **Uvicorn** - ASGI server
+- **Pydantic** - Data validation
+- **SQLite** - Database
+- **PyJWT** - JWT handling
+- **bcrypt** - Password hashing
+- **httpx** - Async HTTP client
 
-instrumentator = Instrumentator()
-instrumentator.instrument(app).expose(app)
-```
-
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Backend won't start
 
@@ -347,12 +333,16 @@ docker logs cert-guardian-backend
 # 3. Port 8000 already in use
 ```
 
-### Frontend can't connect to backend
+### Authentication issues
 
 ```bash
-# Check CORS settings in backend
-# Check proxy configuration in vite.config.js
-# Verify backend is running: curl http://localhost:8000/health
+# Check auth mode
+curl http://localhost:8000/api/auth/mode
+
+# Test login
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin"}'
 ```
 
 ### Database locked error
@@ -368,17 +358,15 @@ rm data/certificates.db-journal
 docker-compose -f docker-compose-webapp.yaml up -d
 ```
 
-### Scanning not working
+### Database read-only (Podman rootless)
 
-```bash
-# Check network connectivity from container
-docker exec cert-guardian-backend ping google.com
-
-# Check scanner logs
-docker logs cert-guardian-scanner
+Use `:U` suffix on volume mounts:
+```yaml
+volumes:
+  - ./data:/app/data:U
 ```
 
-## 🔄 Updates and Maintenance
+## Updates and Maintenance
 
 ### Updating the Application
 
@@ -388,10 +376,6 @@ git pull
 
 # Rebuild and restart
 docker-compose -f docker-compose-webapp.yaml up -d --build
-
-# Or manually
-docker-compose -f docker-compose-webapp.yaml build
-docker-compose -f docker-compose-webapp.yaml up -d
 ```
 
 ### Database Backup
@@ -404,37 +388,14 @@ cp data/certificates.db backups/certificates-$(date +%Y%m%d).db
 0 2 * * * cp /path/to/data/certificates.db /backup/cert-guardian-$(date +\%Y\%m\%d).db
 ```
 
-## 🎯 Roadmap
+## Related Documentation
 
-- [x] ~~Network sweep for IP range scanning~~
-- [x] ~~Per-endpoint webhook configuration~~
-- [x] ~~Search, filter, sort on all pages~~
-- [ ] User authentication and authorization
-- [ ] Multi-tenancy support
-- [ ] Certificate renewal workflows
-- [ ] Slack integration alongside Mattermost
-- [ ] Export reports (PDF, CSV)
-- [ ] Custom dashboards
-- [ ] Alert rules configuration UI
-- [ ] Dark mode
-- [ ] Mobile responsive improvements
+- [README.md](README.md) - Project overview
+- [INSTALL.md](INSTALL.md) - Installation guide
+- [API.md](API.md) - Complete API reference
+- [AUTHENTICATION.md](AUTHENTICATION.md) - Auth setup (Keycloak/Pomerium)
+- [CA_VALIDATION.md](CA_VALIDATION.md) - Custom CA management
 
-## 📝 License
+## License
 
 MIT License - Use freely in your organization.
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📧 Support
-
-For issues or questions:
-- Check the documentation
-- Review API docs at `/docs`
-- Contact your IT Security team

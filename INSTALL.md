@@ -4,10 +4,10 @@
 
 ```
 cert-guardian/
-├── src/                  # Core Python (scanner, database, notifier)
+├── src/                  # Core Python (scanner, database, notifier, auth)
 ├── backend/              # FastAPI REST API
 ├── frontend/             # React webbgränssnitt
-│   └── src/pages/        # Dashboard, Certificates, Endpoints, Security
+│   └── src/pages/        # Dashboard, Certificates, Endpoints, Security, Users
 ├── config/               # Konfigurationsfiler
 ├── kubernetes/           # K8s/OpenShift manifests
 ├── data/                 # SQLite databas (gitignored)
@@ -53,7 +53,11 @@ podman-compose -f docker-compose-webapp.yaml up -d
 # API:       http://localhost:8000
 # API Docs:  http://localhost:8000/docs
 
-# 4. Verifiera
+# 4. Login (local mode)
+# Användarnamn: admin
+# Lösenord: admin (ÄNDRA OMEDELBART!)
+
+# 5. Verifiera
 podman logs -f cert-guardian-backend
 podman logs -f cert-guardian-frontend
 podman logs -f cert-guardian-scanner
@@ -101,20 +105,6 @@ oc expose service cert-guardian-frontend
 oc get route
 ```
 
-### OpenShift med Podman build
-
-```bash
-# Bygg lokalt med Podman
-podman build -t cert-guardian .
-podman build -t cert-guardian-backend -f Dockerfile.backend .
-podman build -t cert-guardian-frontend frontend/
-
-# Pusha till OpenShift registry
-podman login -u $(oc whoami) -p $(oc whoami -t) image-registry.openshift-image-registry.svc:5000
-podman tag cert-guardian image-registry.openshift-image-registry.svc:5000/cert-guardian/scanner:latest
-podman push image-registry.openshift-image-registry.svc:5000/cert-guardian/scanner:latest
-```
-
 ---
 
 ## Option 3: Native Installation (systemd)
@@ -152,6 +142,75 @@ sudo systemctl status cert-guardian
 sudo journalctl -u cert-guardian -f
 ```
 
+---
+
+## Autentiseringskonfiguration
+
+### Local Mode (Default)
+
+Enklaste setup med inbyggd användarhantering:
+
+```yaml
+auth:
+  mode: "local"
+  local:
+    access_token_expire_minutes: 15
+    refresh_token_expire_days: 30
+```
+
+**Första start:** Admin-konto skapas automatiskt
+- Användarnamn: `admin`
+- Lösenord: `admin`
+
+Ändra lösenord via miljövariabel före start:
+```bash
+export CERT_GUARDIAN_ADMIN_PASSWORD="securepassword"
+```
+
+### Keycloak (OIDC)
+
+Enterprise SSO med Keycloak:
+
+```yaml
+auth:
+  mode: "oidc"
+  oidc:
+    issuer: "https://keycloak.example.com/realms/myrealm"
+    client_id: "cert-guardian"
+    client_secret: "your-client-secret"
+    admin_groups: ["cert-admin"]
+    editor_groups: ["cert-editor"]
+```
+
+**Keycloak setup:**
+1. Skapa client `cert-guardian` med Client authentication ON
+2. Sätt Valid redirect URIs: `https://certguardian.example.com/*`
+3. Skapa realm roles: `cert-admin`, `cert-editor`
+4. Tilldela roller till användare
+
+Se [AUTHENTICATION.md](AUTHENTICATION.md) för detaljerad guide.
+
+### Pomerium (Proxy Auth)
+
+SSO via Pomerium proxy:
+
+```yaml
+auth:
+  mode: "proxy"
+  proxy:
+    jwt_issuer: "https://authenticate.example.com"
+    jwks_url: "https://authenticate.example.com/.well-known/pomerium/jwks.json"
+    email_header: "X-Pomerium-Claim-Email"
+    groups_header: "X-Pomerium-Claim-Groups"
+    jwt_header: "X-Pomerium-Jwt-Assertion"
+    admin_groups: ["cert-admins@example.com"]
+    editor_groups: ["cert-editors@example.com"]
+```
+
+Se [AUTHENTICATION.md](AUTHENTICATION.md) för detaljerad guide.
+
+---
+
 ## Post-Installation
 
 ### Verifiera scanning
@@ -172,39 +231,57 @@ curl -X POST -H 'Content-Type: application/json' \
   YOUR_WEBHOOK_URL
 ```
 
-### Testa webbgränssnitt
+### Testa autentisering
 
 ```bash
+# Check auth mode
+curl http://localhost:8000/api/auth/mode
+
+# Login (local mode)
+curl -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+
 # Health check
 curl http://localhost:8000/health
-
-# Trigga scan via API
-curl -X POST http://localhost:8000/api/scan \
-  -H 'Content-Type: application/json' \
-  -d '{"endpoint_id": null}'
 ```
 
 ### Lägg till endpoints
 
-**Via webbgränssnitt:** Gå till Endpoints → Add Endpoint
+**Via webbgränssnitt:** Gå till Endpoints -> Add Endpoint (kräver editor-roll)
+
+**Via API:**
+```bash
+TOKEN="your-jwt-token"
+curl -X POST http://localhost:8000/api/endpoints \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"example.com","port":443,"owner":"IT"}'
+```
 
 **Via config:**
 1. Redigera `config/config.yaml`
 2. Restarta: `podman-compose restart scanner`
 
-### Övervaka
+### Skapa användare (local mode)
 
 ```bash
-# Podman logs
-podman logs -f cert-guardian-scanner
-podman logs -f cert-guardian-backend
-
-# API stats
-curl http://localhost:8000/api/dashboard/stats
-
-# Databas (native)
-sqlite3 data/certificates.db "SELECT COUNT(*) FROM certificates"
+TOKEN="admin-jwt-token"
+curl -X POST http://localhost:8000/api/users \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"editor1","password":"pass123","role":"editor"}'
 ```
+
+### Visa audit logs
+
+```bash
+TOKEN="admin-jwt-token"
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/audit-logs
+```
+
+---
 
 ## Troubleshooting
 
@@ -229,16 +306,38 @@ podman-compose up -d
 
 ### Database read-only (Podman rootless)
 
-Om scannern rapporterar "attempt to write a readonly database":
+Använd `:U` suffix på volume mounts i docker-compose:
 
-```bash
-# Problemet: Podman rootless mappar UID:s annorlunda
-# Lösning: Sätt skrivbara permissions på databasfilen
-chmod 666 data/certificates.db
-podman restart cert-guardian-scanner
+```yaml
+volumes:
+  - ./data:/app/data:U
 ```
 
-**OBS:** Nya databaser skapas nu automatiskt med rätt permissions (fixat i koden).
+### Authentication issues
+
+```bash
+# Check mode
+curl http://localhost:8000/api/auth/mode
+
+# Test login
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin"}'
+
+# Check JWT token
+curl http://localhost:8000/api/auth/me \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### OIDC/Keycloak issues
+
+```bash
+# Verifiera issuer är nåbar
+curl https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration
+
+# Verifiera JWKS
+curl https://keycloak.example.com/realms/myrealm/protocol/openid-connect/certs
+```
 
 ### Frontend kan inte nå backend
 
@@ -256,29 +355,65 @@ podman build -t cert-guardian . 2>&1 | tail -20
 ls -la data/ config/
 ```
 
+---
+
 ## Säkerhet
 
-1. **Skydda config** - innehåller webhook URL
-   ```bash
-   chmod 600 config/config.yaml
-   ```
+### 1. Skydda config
 
-2. **Rootless Podman** - kör utan root
-   ```bash
-   podman-compose up -d  # körs som din användare
-   ```
+```bash
+chmod 600 config/config.yaml
+```
 
-3. **HTTPS för webbgränssnitt** - använd reverse proxy
-   ```bash
-   # Se nginx.conf för exempel
-   ```
+### 2. Rootless Podman
 
-4. **Autentisering** - ej inkluderat, lägg till OAuth2/OIDC för produktion
+```bash
+podman-compose up -d  # körs som din användare
+```
 
-5. **Backup**
-   ```bash
-   cp data/certificates.db backup/cert-guardian-$(date +%Y%m%d).db
-   ```
+### 3. HTTPS för webbgränssnitt
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name certguardian.example.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://localhost:3000;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+### 4. Autentisering
+
+- Ändra default admin-lösenord omedelbart
+- Använd SSO (Keycloak/Pomerium) i produktion
+- Begränsa editor/admin-roller
+
+### 5. Audit logging
+
+Alla ändringar loggas automatiskt:
+- Login/logout
+- CRUD-operationer
+- IP-adresser
+
+Visa med: `GET /api/audit-logs` (admin only)
+
+### 6. Backup
+
+```bash
+cp data/certificates.db backup/cert-guardian-$(date +%Y%m%d).db
+```
+
+---
 
 ## Uppgradering
 
@@ -299,6 +434,8 @@ podman push <registry>/cert-guardian:latest
 oc rollout restart deployment/cert-guardian
 ```
 
+---
+
 ## Monitoring
 
 ```bash
@@ -310,7 +447,24 @@ curl http://localhost:8000/api/dashboard/stats
 
 # Container status
 podman ps --filter name=cert-guardian
+
+# Audit logs (admin)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/audit-logs
 ```
+
+---
+
+## Relaterad dokumentation
+
+| Dokument | Beskrivning |
+|----------|-------------|
+| [README.md](README.md) | Projektöversikt |
+| [WEBAPP_README.md](WEBAPP_README.md) | Webbgränssnitt |
+| [API.md](API.md) | Komplett API-referens |
+| [AUTHENTICATION.md](AUTHENTICATION.md) | Keycloak/Pomerium setup |
+| [CA_VALIDATION.md](CA_VALIDATION.md) | Custom CA management |
+
+---
 
 ## Support
 

@@ -1,25 +1,26 @@
-# Certificate Guardian Configuration
+# Certificate Guardian Configuration Example
+# Copy to config.yaml and customize
 
 database:
   path: "data/certificates.db"
 
 mattermost:
-  webhook_url: "https://your-mattermost.com/hooks/xxxxxxxxxxxxx"
+  webhook_url: "https://your-mattermost.example.com/hooks/YOUR_WEBHOOK_TOKEN"
   channel: "#security-alerts"
   username: "Certificate Guardian"
   icon_emoji: ":lock:"
 
 # Endpoints to scan
 endpoints:
-  - host: "google.com"
+  - host: "example.com"
     port: 443
     owner: "External Test"
     criticality: "low"
-  
-  - host: "github.com"
-    port: 443
-    owner: "External Test"
-    criticality: "low"
+
+  - host: "internal-api.company.com"
+    port: 8443
+    owner: "DevOps"
+    criticality: "critical"
 
 # Notification thresholds (days before expiry)
 notifications:
@@ -32,3 +33,59 @@ scanner:
   interval_seconds: 3600  # Scan every hour
   timeout_seconds: 10
   max_concurrent: 10
+
+# Authentication configuration
+auth:
+  # Mode: "local", "proxy", or "oidc"
+  mode: "local"
+
+  # ========================================
+  # Local auth (username/password with JWT)
+  # ========================================
+  local:
+    # JWT secret - auto-generated if not set (recommended for production: set explicitly)
+    # jwt_secret: "your-32-char-minimum-secret-key-here"
+    access_token_expire_minutes: 15
+    refresh_token_expire_days: 30
+
+  # ========================================
+  # Proxy auth (Pomerium)
+  # ========================================
+  # Uncomment and configure for Pomerium SSO
+  # proxy:
+  #   # Pomerium issuer and JWKS endpoint for JWT validation
+  #   jwt_issuer: "https://authenticate.example.com"
+  #   jwks_url: "https://authenticate.example.com/.well-known/pomerium/jwks.json"
+  #
+  #   # Headers that Pomerium sets
+  #   email_header: "X-Pomerium-Claim-Email"
+  #   groups_header: "X-Pomerium-Claim-Groups"
+  #   jwt_header: "X-Pomerium-Jwt-Assertion"
+  #
+  #   # Map groups to roles
+  #   admin_groups:
+  #     - "cert-admins@example.com"
+  #     - "security-team@example.com"
+  #   editor_groups:
+  #     - "cert-editors@example.com"
+  #     - "devops@example.com"
+
+  # ========================================
+  # OIDC auth (Keycloak, Azure AD, Okta)
+  # ========================================
+  # Uncomment and configure for OIDC SSO
+  # oidc:
+  #   # Keycloak realm URL (or other OIDC issuer)
+  #   issuer: "https://keycloak.example.com/realms/myrealm"
+  #
+  #   # Client credentials (create client in Keycloak with Client authentication: ON)
+  #   client_id: "cert-guardian"
+  #   client_secret: "your-client-secret-from-keycloak"
+  #
+  #   # Map Keycloak roles/groups to Certificate Guardian roles
+  #   admin_groups:
+  #     - "cert-admin"
+  #     - "/Admin"  # Keycloak group path format
+  #   editor_groups:
+  #     - "cert-editor"
+  #     - "/Editors"

@@ -1,98 +1,96 @@
-# Certificate Guardian 🔒
+# Certificate Guardian
 
 Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar till Mattermost innan de går ut.
 
 ## Funktioner
 
-- 📡 **Automatisk scanning** av TLS endpoints
-- 🌐 **Network Sweeps** - Skanna IP-ranges för att upptäcka TLS-tjänster (CIDR/range notation)
-- 💾 **SQLite databas** för att spåra certifikat över tid
-- 📨 **Mattermost notifieringar** vid olika varningsnivåer:
+- **Automatisk scanning** av TLS endpoints
+- **Network Sweeps** - Skanna IP-ranges för att upptäcka TLS-tjänster (CIDR/range notation)
+- **SQLite databas** för att spåra certifikat över tid
+- **Mattermost notifieringar** vid olika varningsnivåer:
   - 90, 60, 30, 14, 7, 3, 1 dagar innan expiry
-  - Färgkodade meddelanden (grön → gul → röd)
+  - Färgkodade meddelanden (grön -> gul -> röd)
   - Dagliga sammanfattningar
   - Per-endpoint webhooks för teamspecifika notifieringar
-- 🔍 **Spårar certifikathistorik** - ser när cert senast scannades
-- 🚫 **Undviker spam** - skickar inte samma varning flera gånger inom 24h
-- 🐳 **Containerized** - lätt att deploya med Podman/Docker
+- **Spårar certifikathistorik** - ser när cert senast scannades
+- **Undviker spam** - skickar inte samma varning flera gånger inom 24h
+- **Containerized** - lätt att deploya med Podman/Docker
+
+### Nya funktioner
+
+- **Multi-mode autentisering** - Stöd för:
+  - Local auth (användarnamn/lösenord med JWT)
+  - Pomerium proxy auth (SSO via headers)
+  - OIDC/Keycloak (OpenID Connect)
+- **Rollbaserad åtkomstkontroll (RBAC)**:
+  - **Viewer** - Kan se certifikat, endpoints och dashboard
+  - **Editor** - Kan skapa, redigera och ta bort endpoints, sweeps, CAs
+  - **Admin** - Full åtkomst, användarhantering, audit logs
+- **Audit logging** - Spårar alla ändringar:
+  - Vem loggar in/ut
+  - Vem skapar/ändrar/tar bort resurser
+  - IP-adresser loggas
+- **Custom CA Management** - Lägg till egna root-certifikat för intern PKI
 
 ## Snabbstart
 
-### 1. Konfigurera Mattermost Webhook
+### 1. Konfigurera
 
-Skapa en incoming webhook i Mattermost:
-1. Gå till **System Console → Integrations → Incoming Webhooks**
-2. Klicka **Add Incoming Webhook**
-3. Välj kanal och kopiera webhook URL
+```bash
+cp config/config.yaml.example config/config.yaml
+nano config/config.yaml
+```
 
-### 2. Redigera config/config.yaml
+### 2. Sätt autentiseringsläge
 
 ```yaml
-mattermost:
-  webhook_url: "https://your-mattermost.com/hooks/YOUR_WEBHOOK_TOKEN"
-  channel: "#security-alerts"
+auth:
+  mode: "local"  # eller "proxy" för Pomerium, "oidc" för Keycloak
 
-endpoints:
-  - host: "example.com"
-    port: 443
-    owner: "IT Team"
-    criticality: "high"
-  
-  - host: "internal-api.company.com"
-    port: 8443
-    owner: "DevOps"
-    criticality: "critical"
+  local:
+    access_token_expire_minutes: 15
+    refresh_token_expire_days: 30
 ```
 
 ### 3. Kör med Podman/Docker
 
 ```bash
-# Bygg imagen
-podman build -t cert-guardian .
+# Bygg och starta med webbgränssnitt
+podman-compose -f docker-compose-webapp.yaml up -d
 
-# Kör en gång för att testa
-podman run --rm -v ./config:/app/config:ro -v ./data:/app/data cert-guardian \
-  python /app/src/main.py --config /app/config/config.yaml --once
-
-# Kör kontinuerligt med compose
-podman-compose up -d
+# Frontend: http://localhost:3000
+# API Docs: http://localhost:8000/docs
 ```
 
-### 4. Eller kör nativt med Python
+Default admin-konto (local mode):
+- Användarnamn: `admin`
+- Lösenord: `admin` (ändra omedelbart!)
 
-```bash
-# Installera dependencies
-pip install -r requirements.txt
+## Dokumentation
 
-# Setup endpoints från config
-python src/main.py --setup
+| Dokument | Beskrivning |
+|----------|-------------|
+| [INSTALL.md](INSTALL.md) | Installationsguide för olika miljöer |
+| [WEBAPP_README.md](WEBAPP_README.md) | Webbgränssnitt och funktioner |
+| [API.md](API.md) | Komplett API-referens |
+| [AUTHENTICATION.md](AUTHENTICATION.md) | Autentisering med Keycloak/Pomerium |
+| [CA_VALIDATION.md](CA_VALIDATION.md) | Custom CA och certifikatvalidering |
 
-# Kör en scan
-python src/main.py --once
+## Roller och behörigheter
 
-# Kör kontinuerlig monitoring
-python src/main.py
-```
+| Funktion | Viewer | Editor | Admin |
+|----------|--------|--------|-------|
+| Visa dashboard | ✅ | ✅ | ✅ |
+| Visa certifikat | ✅ | ✅ | ✅ |
+| Visa endpoints | ✅ | ✅ | ✅ |
+| Skapa/ändra endpoints | ❌ | ✅ | ✅ |
+| Trigga scan | ❌ | ✅ | ✅ |
+| Network sweeps | ❌ | ✅ | ✅ |
+| Hantera trusted CAs | ❌ | ✅ | ✅ |
+| Användarhantering | ❌ | ❌ | ✅ |
+| Visa audit logs | ❌ | ❌ | ✅ |
 
-## Användning
-
-### Kommandon
-
-```bash
-# Kör en scan och avsluta
-python src/main.py --once
-
-# Kör kontinuerlig monitoring (default)
-python src/main.py
-
-# Skicka daglig sammanfattning
-python src/main.py --summary
-
-# Setup endpoints från config
-python src/main.py --setup
-```
-
-### Konfigurations-exempel
+## Konfigurationsexempel
 
 ```yaml
 database:
@@ -104,10 +102,10 @@ mattermost:
   icon_emoji: ":lock:"
 
 endpoints:
-  - host: "google.com"
+  - host: "example.com"
     port: 443
-    owner: "External Test"
-    criticality: "low"
+    owner: "IT Team"
+    criticality: "high"
 
 notifications:
   warning_days: [90, 60, 30, 14, 7, 3, 1]
@@ -115,92 +113,62 @@ notifications:
   emergency_days: 1
 
 scanner:
-  interval_seconds: 3600  # Scanna varje timme
+  interval_seconds: 3600
   timeout_seconds: 10
   max_concurrent: 10
+
+auth:
+  mode: "local"
+  local:
+    access_token_expire_minutes: 15
+    refresh_token_expire_days: 30
 ```
 
 ## Notifieringsnivåer
 
-| Dagar kvar | Nivå | Färg | Emoji |
-|-----------|------|------|-------|
-| 90+ | INFO | Grön | ℹ️ |
-| 30-89 | WARNING | Gul | ⚠️ |
-| 7-29 | CRITICAL | Röd | ⚠️ |
-| 0-6 | EMERGENCY | Röd | 🚨 |
+| Dagar kvar | Nivå | Färg |
+|-----------|------|------|
+| 90+ | INFO | Grön |
+| 30-89 | WARNING | Gul |
+| 7-29 | CRITICAL | Röd |
+| 0-6 | EMERGENCY | Röd |
 
 ## Databas-schema
 
 ### Tabeller
 
-- **certificates** - Lagrar certifikat metadata
+- **certificates** - Certifikat metadata
 - **endpoints** - Konfigurerade endpoints att scanna
 - **certificate_scans** - Historik över scanningar
 - **notifications** - Spårar skickade notifieringar
+- **sweeps** - Network sweep-konfigurationer
+- **sweep_results** - Resultat från sweeps
+- **users** - Användarkonton (local mode)
+- **refresh_tokens** - JWT refresh tokens
+- **trusted_cas** - Custom root-certifikat
+- **audit_log** - Spårning av användaraktiviteter
 
 ## Säkerhetsöverväganden
 
-✅ **Bra:**
+**Bra:**
 - Lagrar ALDRIG private keys
 - Read-only access till endpoints
 - Använder TLS för all kommunikation
-- Loggar alla aktiviteter
-- Ingen persistent connection till scannede system
+- Loggar alla aktiviteter (audit log)
+- Rollbaserad åtkomstkontroll
+- JWT tokens med kort livslängd
 
-⚠️ **Tänk på:**
+**Tänk på:**
 - Webhook URL innehåller secrets - skydda config-filen
-- Database innehåller cert fingerprints - kan vara känsligt
-- Scanning kan trigga IDS/IPS - whitelist scanner IP
-
-## Webbgränssnitt
-
-Certificate Guardian inkluderar ett komplett webbgränssnitt. Se [WEBAPP_README.md](WEBAPP_README.md) för detaljer.
-
-```bash
-# Starta med webbgränssnitt
-podman-compose -f docker-compose-webapp.yaml up -d
-
-# Frontend: http://localhost:3000
-# API Docs: http://localhost:8000/docs
-```
-
-## Framtida förbättringar
-
-- [x] ~~REST API för externa integrations~~
-- [x] ~~Web dashboard för överblick~~
-- [x] ~~Network Sweeps för IP-range scanning~~
-- [x] ~~Per-endpoint webhooks~~
-- [ ] Support för client certificate authentication
-- [ ] Filesystem scanning för .pem/.crt filer
-- [ ] LDAP/AD integration för user certificates
-- [ ] Automatisk renewal för Let's Encrypt certs
-- [ ] Support för flera notification channels (email, Slack, etc.)
-- [ ] Kubernetes CRD för native k8s integration
-
-## Exempel Mattermost-meddelande
-
-```
-⚠️ **CRITICAL: Certificate Expiring Soon**
-
-Endpoint: api.example.com:443
-Days Until Expiry: 7 days
-
-Subject: CN=api.example.com
-Issuer: CN=Let's Encrypt Authority X3
-Expires: 2025-02-09 14:30 UTC
-Owner: DevOps Team
-Criticality: HIGH
-Fingerprint: a1b2c3d4e5f6...
-
-Certificate Guardian
-```
+- Ändra default admin-lösenord omedelbart
+- Använd HTTPS i produktion
+- Konfigurera CORS korrekt för din domän
 
 ## Felsökning
 
 ### Ingen Mattermost-notifiering
 
 ```bash
-# Testa webhook manuellt
 curl -X POST -H 'Content-Type: application/json' \
   -d '{"text":"Test"}' \
   https://your-mattermost.com/hooks/xxxxx
@@ -208,24 +176,19 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ### Connection timeout
 
-Öka timeout i config:
 ```yaml
 scanner:
   timeout_seconds: 30
 ```
 
-### För många notifieringar
+### Database read-only (Podman rootless)
 
-Justera varningströsklar:
+Använd `:U` suffix på volume mounts:
 ```yaml
-notifications:
-  warning_days: [30, 7, 1]  # Färre notifieringar
+volumes:
+  - ./data:/app/data:U
 ```
 
 ## Licens
 
 MIT License - använd fritt i din organisation.
-
-## Support
-
-För frågor eller buggrapporter, kontakta IT Security team.
