@@ -222,8 +222,16 @@ async def get_auth_mode():
     return {"mode": auth_manager.get_mode()}
 
 
+def get_client_ip(request: Request) -> str:
+    """Get client IP from request, handling proxies"""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/api/auth/login")
-async def login(request: LoginRequest, response: Response):
+async def login(login_request: LoginRequest, request: Request, response: Response):
     """Login with username/password (local mode only)"""
     if not auth_manager:
         raise HTTPException(status_code=500, detail="Authentication not configured")
@@ -234,9 +242,24 @@ async def login(request: LoginRequest, response: Response):
             detail=f"Login endpoint not available in {auth_manager.get_mode()} mode"
         )
 
-    result = auth_manager.login(request.username, request.password)
+    result = auth_manager.login(login_request.username, login_request.password)
     if not result:
+        # Log failed login attempt
+        db.add_audit_log(
+            user_email=login_request.username,
+            action="login_failed",
+            details="Invalid username or password",
+            ip_address=get_client_ip(request)
+        )
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # Log successful login
+    db.add_audit_log(
+        user_email=result["user"]["email"],
+        action="login",
+        details=f"User logged in successfully",
+        ip_address=get_client_ip(request)
+    )
 
     # Set refresh token as httpOnly cookie
     response.set_cookie(
@@ -291,12 +314,20 @@ async def refresh_token(
 
 
 @app.post("/api/auth/logout")
-async def logout(request: Request, response: Response):
+async def logout(request: Request, response: Response, user: User = Depends(get_current_user)):
     """Logout and revoke refresh token"""
     if auth_manager and auth_manager.get_mode() == "local":
         refresh_token = request.cookies.get("refresh_token")
         if refresh_token:
             auth_manager.logout(refresh_token)
+
+    # Log logout
+    if user:
+        db.add_audit_log(
+            user_email=user.email,
+            action="logout",
+            ip_address=get_client_ip(request)
+        )
 
     response.delete_cookie("refresh_token")
     return {"message": "Logged out successfully"}
@@ -318,7 +349,7 @@ async def list_users(admin: User = Depends(require_admin)):
 
 
 @app.post("/api/users")
-async def create_user(user_data: UserCreate, admin: User = Depends(require_admin)):
+async def create_user(user_data: UserCreate, request: Request, admin: User = Depends(require_admin)):
     """Create a new user (admin only)"""
     if auth_manager.get_mode() != "local":
         raise HTTPException(
@@ -345,6 +376,16 @@ async def create_user(user_data: UserCreate, admin: User = Depends(require_admin
         role=user_data.role
     )
 
+    # Audit log
+    db.add_audit_log(
+        user_email=admin.email,
+        action="user_create",
+        resource_type="user",
+        resource_id=user_id,
+        details=f"Created user '{user_data.username}' with role '{user_data.role}'",
+        ip_address=get_client_ip(request)
+    )
+
     return {"id": user_id, "message": "User created successfully"}
 
 
@@ -361,6 +402,7 @@ async def get_user(user_id: int, admin: User = Depends(require_admin)):
 async def update_user(
     user_id: int,
     update: UserUpdate,
+    request: Request,
     admin: User = Depends(require_admin)
 ):
     """Update user (admin only)"""
@@ -381,24 +423,38 @@ async def update_user(
 
     # Build update
     updates = {}
+    changes = []
     if update.email is not None:
         updates['email'] = update.email
+        changes.append(f"email→{update.email}")
     if update.role is not None:
         valid_roles = ["viewer", "editor", "admin"]
         if update.role not in valid_roles:
             raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
         updates['role'] = update.role
+        changes.append(f"role→{update.role}")
     if update.is_active is not None:
         updates['is_active'] = 1 if update.is_active else 0
+        changes.append(f"active→{update.is_active}")
 
     if updates:
         db.update_user(user_id, **updates)
+
+        # Audit log
+        db.add_audit_log(
+            user_email=admin.email,
+            action="user_update",
+            resource_type="user",
+            resource_id=user_id,
+            details=f"Updated user '{user['username']}': {', '.join(changes)}",
+            ip_address=get_client_ip(request)
+        )
 
     return {"message": "User updated successfully"}
 
 
 @app.delete("/api/users/{user_id}")
-async def delete_user(user_id: int, admin: User = Depends(require_admin)):
+async def delete_user(user_id: int, request: Request, admin: User = Depends(require_admin)):
     """Delete user (admin only)"""
     user = db.get_user_by_id(user_id)
     if not user:
@@ -419,7 +475,19 @@ async def delete_user(user_id: int, admin: User = Depends(require_admin)):
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
 
+    username = user['username']
     db.delete_user(user_id)
+
+    # Audit log
+    db.add_audit_log(
+        user_email=admin.email,
+        action="user_delete",
+        resource_type="user",
+        resource_id=user_id,
+        details=f"Deleted user '{username}'",
+        ip_address=get_client_ip(request)
+    )
+
     return {"message": "User deleted successfully"}
 
 
@@ -688,44 +756,70 @@ async def get_endpoints():
 
 # Create endpoint
 @app.post("/api/endpoints")
-async def create_endpoint(endpoint: EndpointCreate):
-    """Add new endpoint to monitor"""
+async def create_endpoint(
+    endpoint: EndpointCreate,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Add new endpoint to monitor (editor+)"""
     endpoint_id = db.add_endpoint(
         host=endpoint.host,
         port=endpoint.port,
         owner=endpoint.owner,
         criticality=endpoint.criticality
     )
-    
+
+    # Audit log
+    db.add_audit_log(
+        user_email=user.email,
+        action="endpoint_create",
+        resource_type="endpoint",
+        resource_id=endpoint_id,
+        details=f"Created endpoint {endpoint.host}:{endpoint.port}",
+        ip_address=get_client_ip(request)
+    )
+
     return {"id": endpoint_id, "message": "Endpoint created successfully"}
 
 
 # Update endpoint
 @app.put("/api/endpoints/{endpoint_id}")
-async def update_endpoint(endpoint_id: int, update: EndpointUpdate):
-    """Update endpoint information"""
+async def update_endpoint(
+    endpoint_id: int,
+    update: EndpointUpdate,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Update endpoint information (editor+)"""
     cursor = db.conn.cursor()
 
     # Check if endpoint exists
     cursor.execute("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
-    if not cursor.fetchone():
+    endpoint = cursor.fetchone()
+    if not endpoint:
         raise HTTPException(status_code=404, detail="Endpoint not found")
+
+    endpoint_dict = dict(endpoint)
 
     # Update
     updates = []
     params = []
+    changes = []
 
     if update.owner is not None:
         updates.append("owner = ?")
         params.append(update.owner)
+        changes.append(f"owner→{update.owner}")
 
     if update.criticality is not None:
         updates.append("criticality = ?")
         params.append(update.criticality)
+        changes.append(f"criticality→{update.criticality}")
 
     if update.webhook_url is not None:
         updates.append("webhook_url = ?")
         params.append(update.webhook_url if update.webhook_url else None)
+        changes.append(f"webhook→{'set' if update.webhook_url else 'cleared'}")
 
     if updates:
         query = f"UPDATE endpoints SET {', '.join(updates)} WHERE id = ?"
@@ -733,19 +827,36 @@ async def update_endpoint(endpoint_id: int, update: EndpointUpdate):
         cursor.execute(query, params)
         db.conn.commit()
 
+        # Audit log
+        db.add_audit_log(
+            user_email=user.email,
+            action="endpoint_update",
+            resource_type="endpoint",
+            resource_id=endpoint_id,
+            details=f"Updated {endpoint_dict['host']}:{endpoint_dict['port']}: {', '.join(changes)}",
+            ip_address=get_client_ip(request)
+        )
+
     return {"message": "Endpoint updated successfully"}
 
 
 # Delete endpoint
 @app.delete("/api/endpoints/{endpoint_id}")
-async def delete_endpoint(endpoint_id: int):
-    """Delete endpoint and clean up orphaned certificates"""
+async def delete_endpoint(
+    endpoint_id: int,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Delete endpoint and clean up orphaned certificates (editor+)"""
     cursor = db.conn.cursor()
 
     # Check if endpoint exists
-    cursor.execute("SELECT id FROM endpoints WHERE id = ?", (endpoint_id,))
-    if not cursor.fetchone():
+    cursor.execute("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
+    endpoint = cursor.fetchone()
+    if not endpoint:
         raise HTTPException(status_code=404, detail="Endpoint not found")
+
+    endpoint_dict = dict(endpoint)
 
     # Find certificates that will become orphaned after this endpoint is deleted
     cursor.execute("""
@@ -774,6 +885,16 @@ async def delete_endpoint(endpoint_id: int):
 
     db.conn.commit()
 
+    # Audit log
+    db.add_audit_log(
+        user_email=user.email,
+        action="endpoint_delete",
+        resource_type="endpoint",
+        resource_id=endpoint_id,
+        details=f"Deleted endpoint {endpoint_dict['host']}:{endpoint_dict['port']}",
+        ip_address=get_client_ip(request)
+    )
+
     return {
         "message": "Endpoint deleted successfully",
         "orphaned_certificates_deleted": len(orphaned_cert_ids)
@@ -782,8 +903,13 @@ async def delete_endpoint(endpoint_id: int):
 
 # Trigger scan
 @app.post("/api/scan")
-async def trigger_scan(background_tasks: BackgroundTasks, request: ScanRequest):
-    """Trigger certificate scan"""
+async def trigger_scan(
+    background_tasks: BackgroundTasks,
+    scan_request: ScanRequest,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Trigger certificate scan (editor+)"""
     
     async def do_scan(endpoint_id: Optional[int] = None):
         if endpoint_id:
@@ -835,11 +961,21 @@ async def trigger_scan(background_tasks: BackgroundTasks, request: ScanRequest):
                     )
                     db.add_scan(cert_id, endpoint['id'], 'success')
     
-    background_tasks.add_task(do_scan, request.endpoint_id)
-    
+    background_tasks.add_task(do_scan, scan_request.endpoint_id)
+
+    # Audit log
+    db.add_audit_log(
+        user_email=user.email,
+        action="scan_trigger",
+        resource_type="endpoint" if scan_request.endpoint_id else None,
+        resource_id=scan_request.endpoint_id,
+        details=f"Triggered scan for {'endpoint ' + str(scan_request.endpoint_id) if scan_request.endpoint_id else 'all endpoints'}",
+        ip_address=get_client_ip(request)
+    )
+
     return {
         "message": "Scan initiated",
-        "endpoint_id": request.endpoint_id if request.endpoint_id else "all"
+        "endpoint_id": scan_request.endpoint_id if scan_request.endpoint_id else "all"
     }
 
 
@@ -898,12 +1034,23 @@ async def get_security_issues():
 
 # Send test notification
 @app.post("/api/notifications/test")
-async def send_test_notification():
-    """Send test notification to Mattermost"""
+async def send_test_notification(
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Send test notification to Mattermost (editor+)"""
     if not notifier:
         raise HTTPException(status_code=400, detail="Mattermost not configured")
 
     success = notifier.test_connection()
+
+    # Audit log
+    db.add_audit_log(
+        user_email=user.email,
+        action="notification_test",
+        details=f"Test notification {'succeeded' if success else 'failed'}",
+        ip_address=get_client_ip(request)
+    )
 
     if success:
         return {"message": "Test notification sent successfully"}
@@ -913,25 +1060,29 @@ async def send_test_notification():
 
 # Test webhook URL
 @app.post("/api/webhooks/test")
-async def test_webhook(request: WebhookTest):
-    """Test a webhook URL"""
-    import requests
+async def test_webhook(
+    webhook_request: WebhookTest,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Test a webhook URL (editor+)"""
+    import requests as http_requests
 
     try:
         payload = {
-            "text": request.message,
+            "text": webhook_request.message,
             "username": "Certificate Guardian",
             "icon_emoji": ":lock:"
         }
-        response = requests.post(request.webhook_url, json=payload, timeout=10)
+        response = http_requests.post(webhook_request.webhook_url, json=payload, timeout=10)
 
         if response.status_code == 200:
             return {"success": True, "message": "Webhook test successful"}
         else:
             return {"success": False, "message": f"Webhook returned status {response.status_code}"}
-    except requests.exceptions.Timeout:
+    except http_requests.exceptions.Timeout:
         return {"success": False, "message": "Webhook request timed out"}
-    except requests.exceptions.RequestException as e:
+    except http_requests.exceptions.RequestException as e:
         return {"success": False, "message": f"Webhook error: {str(e)}"}
 
 
@@ -945,8 +1096,12 @@ async def get_trusted_cas():
 
 
 @app.post("/api/trusted-cas")
-async def add_trusted_ca(ca: TrustedCACreate):
-    """Add a trusted CA certificate"""
+async def add_trusted_ca(
+    ca: TrustedCACreate,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Add a trusted CA certificate (editor+)"""
     import hashlib
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
@@ -989,6 +1144,16 @@ async def add_trusted_ca(ca: TrustedCACreate):
         # Refresh scanner's CA list
         scanner.set_custom_cas(db.get_all_trusted_ca_pems())
 
+        # Audit log
+        db.add_audit_log(
+            user_email=user.email,
+            action="ca_create",
+            resource_type="trusted_ca",
+            resource_id=ca_id,
+            details=f"Added trusted CA '{ca.name}'",
+            ip_address=get_client_ip(request)
+        )
+
         return {
             "id": ca_id,
             "fingerprint": fingerprint,
@@ -1003,11 +1168,30 @@ async def add_trusted_ca(ca: TrustedCACreate):
 
 
 @app.delete("/api/trusted-cas/{ca_id}")
-async def delete_trusted_ca(ca_id: int):
-    """Delete a trusted CA certificate"""
+async def delete_trusted_ca(
+    ca_id: int,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Delete a trusted CA certificate (editor+)"""
+    # Get CA info before deleting for audit log
+    cas = db.get_all_trusted_cas()
+    ca_info = next((c for c in cas if c['id'] == ca_id), None)
+
     if db.delete_trusted_ca(ca_id):
         # Refresh scanner's CA list
         scanner.set_custom_cas(db.get_all_trusted_ca_pems())
+
+        # Audit log
+        db.add_audit_log(
+            user_email=user.email,
+            action="ca_delete",
+            resource_type="trusted_ca",
+            resource_id=ca_id,
+            details=f"Deleted trusted CA '{ca_info['name'] if ca_info else 'unknown'}'",
+            ip_address=get_client_ip(request)
+        )
+
         return {"message": "Trusted CA deleted successfully"}
     else:
         raise HTTPException(status_code=404, detail="Trusted CA not found")
@@ -1053,8 +1237,13 @@ async def validate_sweep_target(request: SweepValidation):
 
 
 @app.post("/api/sweeps")
-async def create_sweep(sweep: SweepCreate, background_tasks: BackgroundTasks):
-    """Create and execute a new network sweep"""
+async def create_sweep(
+    sweep: SweepCreate,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Create and execute a new network sweep (editor+)"""
     from network_scanner import validate_target
 
     # Validate target
@@ -1086,6 +1275,16 @@ async def create_sweep(sweep: SweepCreate, background_tasks: BackgroundTasks):
 
     # Start sweep in background
     background_tasks.add_task(execute_sweep, sweep_id)
+
+    # Audit log
+    db.add_audit_log(
+        user_email=user.email,
+        action="sweep_create",
+        resource_type="sweep",
+        resource_id=sweep_id,
+        details=f"Started network sweep '{sweep.name}' on {sweep.target}",
+        ip_address=get_client_ip(request)
+    )
 
     return {"id": sweep_id, "message": "Sweep started", "total_scans": total_scans}
 
@@ -1180,16 +1379,53 @@ async def get_sweep(sweep_id: int):
 
 
 @app.delete("/api/sweeps/{sweep_id}")
-async def delete_sweep(sweep_id: int):
-    """Delete a sweep and its results"""
+async def delete_sweep(
+    sweep_id: int,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Delete a sweep and its results (editor+)"""
     # Check if sweep is running
     sweep = db.get_sweep(sweep_id)
-    if sweep and sweep['status'] == 'running':
+    if not sweep:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+
+    if sweep['status'] == 'running':
         raise HTTPException(status_code=400, detail="Cannot delete running sweep")
 
+    sweep_name = sweep['name']
     if db.delete_sweep(sweep_id):
+        # Audit log
+        db.add_audit_log(
+            user_email=user.email,
+            action="sweep_delete",
+            resource_type="sweep",
+            resource_id=sweep_id,
+            details=f"Deleted sweep '{sweep_name}'",
+            ip_address=get_client_ip(request)
+        )
         return {"message": "Sweep deleted"}
     raise HTTPException(status_code=404, detail="Sweep not found")
+
+
+# ===== Audit Log Endpoints =====
+
+@app.get("/api/audit-logs")
+async def get_audit_logs(
+    limit: int = 100,
+    offset: int = 0,
+    user_email: Optional[str] = None,
+    action: Optional[str] = None,
+    admin: User = Depends(require_admin)
+):
+    """Get audit logs (admin only)"""
+    logs = db.get_audit_logs(
+        limit=limit,
+        offset=offset,
+        user_email=user_email,
+        action=action
+    )
+    return {"logs": logs, "total": len(logs), "limit": limit, "offset": offset}
 
 
 if __name__ == "__main__":

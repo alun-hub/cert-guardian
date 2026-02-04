@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle, Loader2, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import { endpointService, scanService } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 const API_BASE = '/api'
 
 export default function Endpoints() {
+  const { isEditor } = useAuth()
   const [endpoints, setEndpoints] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -160,13 +162,15 @@ export default function Endpoints() {
             {filteredEndpoints.length} of {endpoints.length} endpoints
           </p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-        >
-          <Plus className="w-4 h-4" />
-          Add Endpoint
-        </button>
+        {isEditor && (
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            <Plus className="w-4 h-4" />
+            Add Endpoint
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -298,32 +302,36 @@ export default function Endpoints() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <button
-                          onClick={() => handleScan(endpoint.id)}
-                          disabled={scanning[endpoint.id]}
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
-                          title="Scan"
-                        >
-                          {scanning[endpoint.id] ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Play className="w-4 h-4" />
-                          )}
-                        </button>
-                        <button
-                          onClick={() => setEditingEndpoint(endpoint)}
-                          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                          title="Edit"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(endpoint.id)}
-                          className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {isEditor && (
+                          <>
+                            <button
+                              onClick={() => handleScan(endpoint.id)}
+                              disabled={scanning[endpoint.id]}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
+                              title="Scan"
+                            >
+                              {scanning[endpoint.id] ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Play className="w-4 h-4" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => setEditingEndpoint(endpoint)}
+                              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                              title="Edit"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(endpoint.id)}
+                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

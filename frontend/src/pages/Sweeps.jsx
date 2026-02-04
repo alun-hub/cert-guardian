@@ -4,8 +4,10 @@ import {
   Clock, Loader2, Search, X
 } from 'lucide-react'
 import { sweepService } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 export default function Sweeps() {
+  const { isEditor } = useAuth()
   const [sweeps, setSweeps] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -76,13 +78,15 @@ export default function Sweeps() {
             Discover TLS endpoints in your network
           </p>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-        >
-          <Plus className="w-4 h-4" />
-          New Sweep
-        </button>
+        {isEditor && (
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            <Plus className="w-4 h-4" />
+            New Sweep
+          </button>
+        )}
       </div>
 
       {/* Sweeps Table */}
@@ -171,14 +175,16 @@ export default function Sweeps() {
                       >
                         <Search className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={() => handleDelete(sweep.id)}
-                        disabled={sweep.status === 'running'}
-                        className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Delete sweep"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {isEditor && (
+                        <button
+                          onClick={() => handleDelete(sweep.id)}
+                          disabled={sweep.status === 'running'}
+                          className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Delete sweep"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
