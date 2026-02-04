@@ -1,8 +1,9 @@
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom'
-import { Lock, LayoutDashboard, Server, Shield, Settings } from 'lucide-react'
+import { Lock, LayoutDashboard, Server, Shield, Settings, Network } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import Certificates from './pages/Certificates'
 import Endpoints from './pages/Endpoints'
+import Sweeps from './pages/Sweeps'
 import Security from './pages/Security'
 import SettingsPage from './pages/Settings'
 
@@ -30,6 +31,9 @@ function App() {
             <NavLink to="/endpoints" icon={<Server className="w-5 h-5" />}>
               Endpoints
             </NavLink>
+            <NavLink to="/sweeps" icon={<Network className="w-5 h-5" />}>
+              Network Sweeps
+            </NavLink>
             <NavLink to="/security" icon={<Shield className="w-5 h-5" />}>
               Security
             </NavLink>
@@ -49,6 +53,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/certificates" element={<Certificates />} />
             <Route path="/endpoints" element={<Endpoints />} />
+            <Route path="/sweeps" element={<Sweeps />} />
             <Route path="/security" element={<Security />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

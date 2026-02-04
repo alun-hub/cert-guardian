@@ -39,4 +39,12 @@ export const notificationService = {
   sendTest: () => api.post('/notifications/test'),
 }
 
+export const sweepService = {
+  getAll: () => api.get('/sweeps'),
+  getById: (id) => api.get(`/sweeps/${id}`),
+  create: (data) => api.post('/sweeps', data),
+  delete: (id) => api.delete(`/sweeps/${id}`),
+  validate: (target) => api.post('/sweeps/validate', { target }),
+}
+
 export default api

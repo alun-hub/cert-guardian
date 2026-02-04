@@ -227,6 +227,19 @@ rm data/certificates.db-journal
 podman-compose up -d
 ```
 
+### Database read-only (Podman rootless)
+
+Om scannern rapporterar "attempt to write a readonly database":
+
+```bash
+# Problemet: Podman rootless mappar UID:s annorlunda
+# Lösning: Sätt skrivbara permissions på databasfilen
+chmod 666 data/certificates.db
+podman restart cert-guardian-scanner
+```
+
+**OBS:** Nya databaser skapas nu automatiskt med rätt permissions (fixat i koden).
+
 ### Frontend kan inte nå backend
 
 1. Kolla CORS i api.py

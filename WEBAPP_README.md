@@ -13,6 +13,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 ### Certificates View
 - **Comprehensive List** - All monitored certificates with status
 - **Advanced Filtering** - Search, filter by expiry, trust status
+- **Sortable Columns** - Sort by certificate, endpoints, expiry, trust status
 - **Color-Coded Status** - Easy visual identification of issues
 - **Trust Validation** - See which certs are self-signed or untrusted
 
@@ -21,6 +22,18 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Per-Endpoint Scanning** - Scan individual endpoints on demand
 - **Criticality Levels** - Mark endpoints as low/medium/high/critical
 - **Owner Assignment** - Track responsibility for each endpoint
+- **Per-Endpoint Webhooks** - Configure specific Mattermost webhook per endpoint
+- **Search & Filter** - Search by host/owner, filter by criticality, expiry, webhook status
+- **Sortable Columns** - Sort by any column
+
+### Network Sweeps
+- **IP Range Scanning** - Discover TLS endpoints in your network
+- **CIDR Support** - Use notation like `192.168.1.0/24`
+- **Range Support** - Use notation like `10.0.0.1-50`
+- **Custom Ports** - Scan port 443 and additional ports
+- **Auto-Create Endpoints** - Discovered services added automatically
+- **Progress Tracking** - Real-time progress during sweep
+- **Batch Configuration** - Set owner, criticality, webhook for all discovered endpoints
 
 ### Security Dashboard
 - **Security Issues Overview** - Self-signed and untrusted certificates
@@ -112,11 +125,21 @@ npm run dev
 - `POST /api/scan` - Trigger scan
   - Body: `{"endpoint_id": 1}` or `{"endpoint_id": null}` for all
 
+**Network Sweeps:**
+- `GET /api/sweeps` - List all sweeps
+- `POST /api/sweeps` - Create and start a new sweep
+  - Body: `{"name": "Office Network", "target": "192.168.1.0/24", "ports": [443, 8443], "owner": "IT", "criticality": "medium"}`
+- `GET /api/sweeps/{id}` - Get sweep details with results
+- `DELETE /api/sweeps/{id}` - Delete a sweep
+- `POST /api/sweeps/validate` - Validate target and get IP count
+  - Body: `{"target": "10.0.0.0/24"}`
+
 **Security:**
 - `GET /api/security/issues` - Get all security issues
 
-**Notifications:**
-- `POST /api/notifications/test` - Send test notification
+**Webhooks:**
+- `POST /api/webhooks/test` - Test a webhook URL
+  - Body: `{"webhook_url": "https://...", "message": "Test"}`
 
 **Health:**
 - `GET /health` - Health check
@@ -383,6 +406,9 @@ cp data/certificates.db backups/certificates-$(date +%Y%m%d).db
 
 ## 🎯 Roadmap
 
+- [x] ~~Network sweep for IP range scanning~~
+- [x] ~~Per-endpoint webhook configuration~~
+- [x] ~~Search, filter, sort on all pages~~
 - [ ] User authentication and authorization
 - [ ] Multi-tenancy support
 - [ ] Certificate renewal workflows
@@ -390,7 +416,6 @@ cp data/certificates.db backups/certificates-$(date +%Y%m%d).db
 - [ ] Export reports (PDF, CSV)
 - [ ] Custom dashboards
 - [ ] Alert rules configuration UI
-- [ ] Webhook management UI
 - [ ] Dark mode
 - [ ] Mobile responsive improvements
 

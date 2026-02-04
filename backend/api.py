@@ -236,7 +236,7 @@ async def get_certificates(
     for row in cursor.fetchall():
         cert_dict = dict(row)
         
-        # Get endpoints for this certificate
+        # Get endpoints where the LATEST scan returned this certificate
         cursor.execute("""
             SELECT e.id, e.host, e.port, e.owner, e.criticality
             FROM endpoints e
@@ -246,9 +246,9 @@ async def get_certificates(
             AND cs.scanned_at = (
                 SELECT MAX(scanned_at)
                 FROM certificate_scans
-                WHERE certificate_id = ? AND endpoint_id = e.id
+                WHERE endpoint_id = e.id
             )
-        """, (cert_dict['id'], cert_dict['id']))
+        """, (cert_dict['id'],))
         
         cert_dict['endpoints'] = [dict(ep) for ep in cursor.fetchall()]
         results.append(cert_dict)
@@ -388,15 +388,45 @@ async def update_endpoint(endpoint_id: int, update: EndpointUpdate):
 # Delete endpoint
 @app.delete("/api/endpoints/{endpoint_id}")
 async def delete_endpoint(endpoint_id: int):
-    """Delete endpoint"""
+    """Delete endpoint and clean up orphaned certificates"""
     cursor = db.conn.cursor()
-    cursor.execute("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
-    db.conn.commit()
-    
-    if cursor.rowcount == 0:
+
+    # Check if endpoint exists
+    cursor.execute("SELECT id FROM endpoints WHERE id = ?", (endpoint_id,))
+    if not cursor.fetchone():
         raise HTTPException(status_code=404, detail="Endpoint not found")
-    
-    return {"message": "Endpoint deleted successfully"}
+
+    # Find certificates that will become orphaned after this endpoint is deleted
+    cursor.execute("""
+        SELECT DISTINCT certificate_id FROM certificate_scans
+        WHERE endpoint_id = ?
+        AND certificate_id NOT IN (
+            SELECT DISTINCT certificate_id FROM certificate_scans
+            WHERE endpoint_id != ?
+        )
+    """, (endpoint_id, endpoint_id))
+    orphaned_cert_ids = [row[0] for row in cursor.fetchall()]
+
+    # Delete notifications for this endpoint
+    cursor.execute("DELETE FROM notifications WHERE endpoint_id = ?", (endpoint_id,))
+
+    # Delete certificate scans for this endpoint
+    cursor.execute("DELETE FROM certificate_scans WHERE endpoint_id = ?", (endpoint_id,))
+
+    # Delete the endpoint
+    cursor.execute("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
+
+    # Delete orphaned certificates
+    if orphaned_cert_ids:
+        placeholders = ','.join('?' * len(orphaned_cert_ids))
+        cursor.execute(f"DELETE FROM certificates WHERE id IN ({placeholders})", orphaned_cert_ids)
+
+    db.conn.commit()
+
+    return {
+        "message": "Endpoint deleted successfully",
+        "orphaned_certificates_deleted": len(orphaned_cert_ids)
+    }
 
 
 # Trigger scan
@@ -640,6 +670,175 @@ async def get_trusted_ca_pem(ca_id: int):
         return {"pem_data": pem}
     else:
         raise HTTPException(status_code=404, detail="Trusted CA not found")
+
+
+# ===== Network Sweep Endpoints =====
+
+class SweepCreate(BaseModel):
+    name: str
+    target: str
+    ports: List[int] = [443]
+    owner: Optional[str] = None
+    criticality: str = "medium"
+    webhook_url: Optional[str] = None
+
+
+class SweepValidation(BaseModel):
+    target: str
+
+
+@app.post("/api/sweeps/validate")
+async def validate_sweep_target(request: SweepValidation):
+    """Validate a sweep target (CIDR or IP range)"""
+    from network_scanner import validate_target
+
+    valid, error, ip_count = validate_target(request.target)
+
+    return {
+        "valid": valid,
+        "error": error if error else None,
+        "ip_count": ip_count
+    }
+
+
+@app.post("/api/sweeps")
+async def create_sweep(sweep: SweepCreate, background_tasks: BackgroundTasks):
+    """Create and execute a new network sweep"""
+    from network_scanner import validate_target
+
+    # Validate target
+    valid, error, ip_count = validate_target(sweep.target)
+    if not valid:
+        raise HTTPException(status_code=400, detail=error)
+
+    # Validate ports
+    if not sweep.ports:
+        raise HTTPException(status_code=400, detail="At least one port required")
+
+    for port in sweep.ports:
+        if port < 1 or port > 65535:
+            raise HTTPException(status_code=400, detail=f"Invalid port: {port}")
+
+    # Create sweep record
+    sweep_id = db.create_sweep(
+        name=sweep.name,
+        target=sweep.target,
+        ports=sweep.ports,
+        owner=sweep.owner,
+        criticality=sweep.criticality,
+        webhook_url=sweep.webhook_url
+    )
+
+    # Set initial progress
+    total_scans = ip_count * len(sweep.ports)
+    db.update_sweep_status(sweep_id, "pending", progress_total=total_scans)
+
+    # Start sweep in background
+    background_tasks.add_task(execute_sweep, sweep_id)
+
+    return {"id": sweep_id, "message": "Sweep started", "total_scans": total_scans}
+
+
+async def execute_sweep(sweep_id: int):
+    """Execute sweep and discover endpoints"""
+    import asyncio
+    import json
+    from network_scanner import NetworkScanner
+
+    sweep = db.get_sweep(sweep_id)
+    if not sweep:
+        return
+
+    try:
+        db.update_sweep_status(sweep_id, "running",
+                               started_at=datetime.utcnow().isoformat())
+
+        scanner_net = NetworkScanner(timeout=3.0, max_concurrent=100)
+        ports = json.loads(sweep['ports'])
+
+        def update_progress(progress):
+            db.update_sweep_status(
+                sweep_id, "running",
+                progress_scanned=progress.scanned,
+                progress_found=progress.found
+            )
+
+        # Run the async sweep
+        open_ports = await scanner_net.sweep(sweep['target'], ports, update_progress)
+
+        # Process discovered endpoints
+        for result in open_ports:
+            # Create endpoint with metadata from sweep config
+            endpoint_id = db.add_endpoint(
+                host=result.ip,
+                port=result.port,
+                owner=sweep['owner'],
+                criticality=sweep['criticality']
+            )
+
+            # Set webhook if configured
+            if sweep['webhook_url']:
+                db.update_endpoint_webhook(endpoint_id, sweep['webhook_url'])
+
+            # Record sweep result
+            db.add_sweep_result(sweep_id, result.ip, result.port, "open", endpoint_id)
+
+            # Scan certificate immediately
+            cert_info = scanner.scan_endpoint(result.ip, result.port)
+            if cert_info:
+                cert_id = db.add_certificate(
+                    fingerprint=cert_info.fingerprint,
+                    subject=cert_info.subject,
+                    issuer=cert_info.issuer,
+                    not_before=cert_info.not_before.isoformat(),
+                    not_after=cert_info.not_after.isoformat(),
+                    serial_number=cert_info.serial_number,
+                    san_list=cert_info.san_list,
+                    is_self_signed=cert_info.is_self_signed,
+                    is_trusted_ca=cert_info.is_trusted_ca,
+                    validation_error=cert_info.validation_error,
+                    chain_length=cert_info.chain_length
+                )
+                db.add_scan(cert_id, endpoint_id, 'success')
+
+        db.update_sweep_status(sweep_id, "completed",
+                               completed_at=datetime.utcnow().isoformat())
+
+    except Exception as e:
+        import logging
+        logging.error(f"Sweep {sweep_id} failed: {e}")
+        db.update_sweep_status(sweep_id, "failed", error_message=str(e))
+
+
+@app.get("/api/sweeps")
+async def get_sweeps():
+    """Get all sweeps"""
+    sweeps = db.get_all_sweeps()
+    return {"sweeps": sweeps, "total": len(sweeps)}
+
+
+@app.get("/api/sweeps/{sweep_id}")
+async def get_sweep(sweep_id: int):
+    """Get sweep details including results"""
+    sweep = db.get_sweep(sweep_id)
+    if not sweep:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+
+    sweep['results'] = db.get_sweep_results(sweep_id)
+    return sweep
+
+
+@app.delete("/api/sweeps/{sweep_id}")
+async def delete_sweep(sweep_id: int):
+    """Delete a sweep and its results"""
+    # Check if sweep is running
+    sweep = db.get_sweep(sweep_id)
+    if sweep and sweep['status'] == 'running':
+        raise HTTPException(status_code=400, detail="Cannot delete running sweep")
+
+    if db.delete_sweep(sweep_id):
+        return {"message": "Sweep deleted"}
+    raise HTTPException(status_code=404, detail="Sweep not found")
 
 
 if __name__ == "__main__":

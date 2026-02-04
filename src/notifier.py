@@ -161,17 +161,25 @@ class MattermostNotifier:
             "short": True
         })
         
-        # Build payload
+        # Build message text (Mattermost-compatible markdown)
+        message_lines = [header_text, ""]
+
+        for field in fields:
+            if field.get("short"):
+                message_lines.append(f"**{field['title']}:** {field['value']}")
+            else:
+                message_lines.append(f"**{field['title']}:**")
+                message_lines.append(field['value'])
+                message_lines.append("")
+
+        message_lines.append("---")
+        message_lines.append("_Certificate Guardian_")
+
+        # Build payload (simple Mattermost format)
         payload = {
             "username": self.username,
             "icon_emoji": self.icon_emoji,
-            "text": header_text,
-            "attachments": [{
-                "color": color,
-                "fields": fields,
-                "footer": "Certificate Guardian",
-                "footer_icon": "https://emojipedia-us.s3.amazonaws.com/source/skype/289/locked_1f512.png"
-            }]
+            "text": "\n".join(message_lines)
         }
         
         try:
@@ -237,16 +245,27 @@ class MattermostNotifier:
                 "short": False
             })
         
+        # Build message text
+        message_lines = [
+            "📊 **Daily Certificate Expiry Summary**",
+            "",
+            summary_text,
+            "",
+            "### Top 10 Most Urgent Certificates",
+            ""
+        ]
+
+        for field in fields:
+            message_lines.append(f"- **{field['title']}**: {field['value']}")
+
+        message_lines.append("")
+        message_lines.append("---")
+        message_lines.append("_Certificate Guardian - Daily Summary_")
+
         payload = {
             "username": self.username,
             "icon_emoji": self.icon_emoji,
-            "text": f"📊 **Daily Certificate Expiry Summary**\n\n{summary_text}",
-            "attachments": [{
-                "color": "warning" if (emergency or critical) else "good",
-                "title": "Top 10 Most Urgent Certificates",
-                "fields": fields,
-                "footer": "Certificate Guardian - Daily Summary"
-            }]
+            "text": "\n".join(message_lines)
         }
         
         try:
@@ -320,16 +339,28 @@ class MattermostNotifier:
                 "short": False
             })
         
+        # Build message text
+        message_lines = [
+            "🔐 **Security Alert: Certificate Trust Issues Detected**",
+            "",
+            summary_text,
+            "",
+            "### Affected Endpoints",
+            ""
+        ]
+
+        for field in fields:
+            message_lines.append(f"**{field['title']}**")
+            message_lines.append(field['value'])
+            message_lines.append("")
+
+        message_lines.append("---")
+        message_lines.append("_Certificate Guardian - Security Check_")
+
         payload = {
             "username": self.username,
             "icon_emoji": self.icon_emoji,
-            "text": f"🔐 **Security Alert: Certificate Trust Issues Detected**\n\n{summary_text}",
-            "attachments": [{
-                "color": "danger",
-                "title": "Affected Endpoints",
-                "fields": fields,
-                "footer": "Certificate Guardian - Security Check"
-            }]
+            "text": "\n".join(message_lines)
         }
         
         try:

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle } from 'lucide-react'
+import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle, Loader2, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import { endpointService, scanService } from '../services/api'
 
 const API_BASE = '/api'
@@ -10,6 +10,13 @@ export default function Endpoints() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingEndpoint, setEditingEndpoint] = useState(null)
   const [scanning, setScanning] = useState({})
+  const [filters, setFilters] = useState({
+    search: '',
+    criticality: null,
+    hasWebhook: null,
+    expiringDays: null,
+  })
+  const [sortConfig, setSortConfig] = useState({ key: 'host', direction: 'asc' })
 
   const loadEndpoints = async () => {
     try {
@@ -41,7 +48,7 @@ export default function Endpoints() {
 
   const handleDelete = async (endpointId) => {
     if (!confirm('Are you sure you want to delete this endpoint?')) return
-    
+
     try {
       await endpointService.delete(endpointId)
       loadEndpoints()
@@ -50,6 +57,99 @@ export default function Endpoints() {
     }
   }
 
+  const getCriticalityColor = (criticality) => {
+    switch (criticality) {
+      case 'critical': return 'bg-red-100 text-red-800'
+      case 'high': return 'bg-orange-100 text-orange-800'
+      case 'medium': return 'bg-yellow-100 text-yellow-800'
+      case 'low': return 'bg-green-100 text-green-800'
+      default: return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  const getExpiryColor = (days) => {
+    if (days <= 7) return 'text-red-600'
+    if (days <= 30) return 'text-yellow-600'
+    return 'text-green-600'
+  }
+
+  const filteredEndpoints = endpoints
+    .filter(ep => {
+      if (filters.search) {
+        const searchLower = filters.search.toLowerCase()
+        const matchesSearch =
+          ep.host.toLowerCase().includes(searchLower) ||
+          (ep.owner && ep.owner.toLowerCase().includes(searchLower))
+        if (!matchesSearch) return false
+      }
+      if (filters.criticality && ep.criticality !== filters.criticality) return false
+      if (filters.hasWebhook === true && !ep.webhook_url) return false
+      if (filters.hasWebhook === false && ep.webhook_url) return false
+      if (filters.expiringDays) {
+        const daysLeft = ep.last_scan ? Math.floor(ep.last_scan.days_until_expiry) : null
+        if (daysLeft === null || daysLeft > filters.expiringDays) return false
+      }
+      return true
+    })
+    .sort((a, b) => {
+      let aVal, bVal
+      switch (sortConfig.key) {
+        case 'host':
+          aVal = a.host.toLowerCase()
+          bVal = b.host.toLowerCase()
+          break
+        case 'port':
+          aVal = a.port
+          bVal = b.port
+          break
+        case 'owner':
+          aVal = (a.owner || '').toLowerCase()
+          bVal = (b.owner || '').toLowerCase()
+          break
+        case 'criticality':
+          const order = { critical: 0, high: 1, medium: 2, low: 3 }
+          aVal = order[a.criticality] ?? 4
+          bVal = order[b.criticality] ?? 4
+          break
+        case 'webhook':
+          aVal = a.webhook_url ? 0 : 1
+          bVal = b.webhook_url ? 0 : 1
+          break
+        case 'expires':
+          aVal = a.last_scan?.days_until_expiry ?? 9999
+          bVal = b.last_scan?.days_until_expiry ?? 9999
+          break
+        default:
+          return 0
+      }
+      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
+      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
+      return 0
+    })
+
+  const handleSort = (key) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }))
+  }
+
+  const SortHeader = ({ label, sortKey }) => (
+    <th
+      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+      onClick={() => handleSort(sortKey)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        {sortConfig.key === sortKey && (
+          sortConfig.direction === 'asc'
+            ? <ChevronUp className="w-3 h-3" />
+            : <ChevronDown className="w-3 h-3" />
+        )}
+      </div>
+    </th>
+  )
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -57,7 +157,7 @@ export default function Endpoints() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Endpoints</h1>
           <p className="text-gray-500 mt-1">
-            {endpoints.length} endpoints being monitored
+            {filteredEndpoints.length} of {endpoints.length} endpoints
           </p>
         </div>
         <button
@@ -69,28 +169,169 @@ export default function Endpoints() {
         </button>
       </div>
 
-      {/* Endpoints Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {loading ? (
-          <div className="col-span-full p-8 text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-300 border-t-blue-600"></div>
+      {/* Filters */}
+      <div className="bg-white rounded-lg shadow-md p-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+          {/* Search */}
+          <div className="lg:col-span-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search host or owner..."
+                value={filters.search}
+                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
           </div>
-        ) : endpoints.length === 0 ? (
-          <div className="col-span-full p-8 text-center text-gray-500">
-            No endpoints configured. Add your first endpoint to start monitoring.
-          </div>
-        ) : (
-          endpoints.map(endpoint => (
-            <EndpointCard
-              key={endpoint.id}
-              endpoint={endpoint}
-              onScan={() => handleScan(endpoint.id)}
-              onDelete={() => handleDelete(endpoint.id)}
-              onEdit={() => setEditingEndpoint(endpoint)}
-              scanning={scanning[endpoint.id]}
-            />
-          ))
-        )}
+
+          {/* Criticality filter */}
+          <select
+            value={filters.criticality || ''}
+            onChange={(e) => setFilters({ ...filters, criticality: e.target.value || null })}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Criticality</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+
+          {/* Expiring filter */}
+          <select
+            value={filters.expiringDays || ''}
+            onChange={(e) => setFilters({ ...filters, expiringDays: e.target.value ? parseInt(e.target.value) : null })}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Expiry</option>
+            <option value="7">Expiring in 7 days</option>
+            <option value="30">Expiring in 30 days</option>
+            <option value="90">Expiring in 90 days</option>
+          </select>
+
+          {/* Webhook filter */}
+          <select
+            value={filters.hasWebhook === null ? '' : (filters.hasWebhook ? 'yes' : 'no')}
+            onChange={(e) => {
+              const val = e.target.value
+              setFilters({ ...filters, hasWebhook: val === '' ? null : val === 'yes' })
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Webhooks</option>
+            <option value="yes">With Webhook</option>
+            <option value="no">Without Webhook</option>
+          </select>
+
+          {/* Clear filters */}
+          <button
+            onClick={() => setFilters({ search: '', criticality: null, hasWebhook: null, expiringDays: null })}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+          >
+            Clear Filters
+          </button>
+        </div>
+      </div>
+
+      {/* Endpoints Table */}
+      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-gray-50 border-b">
+            <tr>
+              <SortHeader label="Host" sortKey="host" />
+              <SortHeader label="Port" sortKey="port" />
+              <SortHeader label="Owner" sortKey="owner" />
+              <SortHeader label="Criticality" sortKey="criticality" />
+              <SortHeader label="Webhook" sortKey="webhook" />
+              <SortHeader label="Expires" sortKey="expires" />
+              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {loading ? (
+              <tr>
+                <td colSpan="7" className="px-4 py-8 text-center">
+                  <Loader2 className="w-8 h-8 mx-auto animate-spin text-blue-500" />
+                </td>
+              </tr>
+            ) : filteredEndpoints.length === 0 ? (
+              <tr>
+                <td colSpan="7" className="px-4 py-8 text-center text-gray-500">
+                  <Server className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                  <p>{endpoints.length === 0 ? 'No endpoints configured. Add your first endpoint to start monitoring.' : 'No endpoints match the current filters.'}</p>
+                </td>
+              </tr>
+            ) : (
+              filteredEndpoints.map(endpoint => {
+                const lastScan = endpoint.last_scan
+                const daysLeft = lastScan ? Math.floor(lastScan.days_until_expiry) : null
+
+                return (
+                  <tr key={endpoint.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <span className="font-medium text-gray-900">{endpoint.host}</span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{endpoint.port}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{endpoint.owner || '-'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${getCriticalityColor(endpoint.criticality)}`}>
+                        {endpoint.criticality}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {endpoint.webhook_url ? (
+                        <Bell className="w-4 h-4 text-green-500" />
+                      ) : (
+                        <span className="text-gray-300">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {daysLeft !== null ? (
+                        <span className={`text-sm font-medium ${getExpiryColor(daysLeft)}`}>
+                          {daysLeft} days
+                        </span>
+                      ) : (
+                        <span className="text-sm text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
+                        <button
+                          onClick={() => handleScan(endpoint.id)}
+                          disabled={scanning[endpoint.id]}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
+                          title="Scan"
+                        >
+                          {scanning[endpoint.id] ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Play className="w-4 h-4" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => setEditingEndpoint(endpoint)}
+                          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                          title="Edit"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(endpoint.id)}
+                          className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Add Endpoint Modal */}
@@ -119,106 +360,42 @@ export default function Endpoints() {
   )
 }
 
-function EndpointCard({ endpoint, onScan, onDelete, onEdit, scanning }) {
-  const getCriticalityColor = (criticality) => {
-    switch (criticality) {
-      case 'critical': return 'bg-red-100 text-red-800 border-red-200'
-      case 'high': return 'bg-orange-100 text-orange-800 border-orange-200'
-      case 'medium': return 'bg-yellow-100 text-yellow-800 border-yellow-200'
-      case 'low': return 'bg-green-100 text-green-800 border-green-200'
-      default: return 'bg-gray-100 text-gray-800 border-gray-200'
-    }
-  }
-
-  const lastScan = endpoint.last_scan
-  const daysLeft = lastScan ? Math.floor(lastScan.days_until_expiry) : null
-
-  return (
-    <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-100 rounded-lg">
-            <Server className="w-6 h-6 text-blue-600" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-gray-900">{endpoint.host}</h3>
-            <p className="text-sm text-gray-500">Port {endpoint.port}</p>
-          </div>
-        </div>
-        <button
-          onClick={() => onEdit(endpoint)}
-          className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
-        >
-          <Edit2 className="w-4 h-4" />
-        </button>
-      </div>
-
-      <div className="space-y-3 mb-4">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-600">Owner</span>
-          <span className="text-sm font-medium">{endpoint.owner || 'Unassigned'}</span>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-600">Criticality</span>
-          <span className={`px-2 py-1 text-xs font-medium rounded ${getCriticalityColor(endpoint.criticality)}`}>
-            {endpoint.criticality.toUpperCase()}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-600">Webhook</span>
-          {endpoint.webhook_url ? (
-            <span className="flex items-center gap-1 text-sm text-green-600">
-              <Bell className="w-3 h-3" /> Configured
-            </span>
-          ) : (
-            <span className="text-sm text-gray-400">Not set</span>
-          )}
-        </div>
-
-        {lastScan && (
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-600">Expires in</span>
-            <span className={`text-sm font-medium ${
-              daysLeft <= 7 ? 'text-red-600' :
-              daysLeft <= 30 ? 'text-yellow-600' :
-              'text-green-600'
-            }`}>
-              {daysLeft} days
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={onScan}
-          disabled={scanning}
-          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
-        >
-          <Play className={`w-4 h-4 ${scanning ? 'animate-spin' : ''}`} />
-          {scanning ? 'Scanning...' : 'Scan'}
-        </button>
-        <button
-          onClick={onDelete}
-          className="px-3 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 text-sm"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function AddEndpointModal({ onClose, onSuccess }) {
   const [formData, setFormData] = useState({
     host: '',
     port: 443,
     owner: '',
     criticality: 'medium',
+    webhook_url: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [testingWebhook, setTestingWebhook] = useState(false)
+  const [webhookResult, setWebhookResult] = useState(null)
+
+  const handleTestWebhook = async () => {
+    if (!formData.webhook_url) return
+
+    try {
+      setTestingWebhook(true)
+      setWebhookResult(null)
+
+      const response = await fetch(`${API_BASE}/webhooks/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webhook_url: formData.webhook_url,
+          message: `Test notification for ${formData.host || 'new endpoint'}:${formData.port}`
+        })
+      })
+
+      const data = await response.json()
+      setWebhookResult(data)
+    } catch (error) {
+      setWebhookResult({ success: false, message: error.message })
+    } finally {
+      setTestingWebhook(false)
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -297,6 +474,48 @@ function AddEndpointModal({ onClose, onSuccess }) {
               <option value="high">High</option>
               <option value="critical">Critical</option>
             </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Mattermost Webhook URL
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={formData.webhook_url}
+                onChange={(e) => {
+                  setFormData({ ...formData, webhook_url: e.target.value })
+                  setWebhookResult(null)
+                }}
+                placeholder="https://mattermost.example.com/hooks/..."
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleTestWebhook}
+                disabled={!formData.webhook_url || testingWebhook}
+                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
+              >
+                {testingWebhook ? 'Testing...' : 'Test'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Optional: Send notifications for this endpoint to a specific webhook
+            </p>
+
+            {webhookResult && (
+              <div className={`mt-2 p-2 rounded text-sm flex items-center gap-2 ${
+                webhookResult.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {webhookResult.success ? (
+                  <CheckCircle className="w-4 h-4" />
+                ) : (
+                  <XCircle className="w-4 h-4" />
+                )}
+                {webhookResult.message}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-3 pt-4">

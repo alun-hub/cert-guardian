@@ -62,7 +62,7 @@ export default function Dashboard() {
     }
   }
 
-  if (loading) {
+  if (loading || !stats) {
     return (
       <div className="flex items-center justify-center h-96">
         <RefreshCw className="w-8 h-8 animate-spin text-blue-500" />
@@ -167,17 +167,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-      {/* Endpoints Status */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-lg font-semibold mb-4">Monitored Endpoints</h2>
-        <p className="text-3xl font-bold text-gray-900">
-          {stats.total_endpoints}
-        </p>
-        <p className="text-gray-500 text-sm mt-1">
-          Total endpoints being monitored
-        </p>
-      </div>
     </div>
   )
 }
@@ -206,6 +195,16 @@ function StatCard({ title, value, subtitle, icon, color }) {
   )
 }
 
+function extractCN(distinguishedName) {
+  if (!distinguishedName) return 'Unknown'
+  const cnMatch = distinguishedName.match(/(?:commonName|CN)=([^,]+)/i)
+  if (cnMatch) return cnMatch[1].trim()
+  const firstAttr = distinguishedName.split(',')[0]
+  const eqIndex = firstAttr.indexOf('=')
+  if (eqIndex > -1) return firstAttr.substring(eqIndex + 1).trim()
+  return distinguishedName
+}
+
 function CertificateCard({ cert }) {
   const daysLeft = Math.floor(cert.days_until_expiry)
   const isUrgent = daysLeft <= 7
@@ -213,14 +212,14 @@ function CertificateCard({ cert }) {
 
   return (
     <div className={`border-l-4 ${
-      isUrgent ? 'border-red-500 bg-red-50' : 
-      isWarning ? 'border-yellow-500 bg-yellow-50' : 
+      isUrgent ? 'border-red-500 bg-red-50' :
+      isWarning ? 'border-yellow-500 bg-yellow-50' :
       'border-blue-500 bg-blue-50'
     } p-4 rounded`}>
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <p className="font-medium text-gray-900">
-            {cert.subject.split(',')[0].replace('CN=', '')}
+            {extractCN(cert.subject)}
           </p>
           <p className="text-sm text-gray-600 mt-1">
             {cert.endpoints?.[0]?.host || 'Unknown endpoint'}

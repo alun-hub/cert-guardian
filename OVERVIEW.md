@@ -13,12 +13,20 @@ Ett säkerhetsverktyg som automatiskt övervakar TLS-certifikat på dina endpoin
 - **Validerar mot system CA store**
 - **Detekterar self-signed certifikat**
 
+✅ **Network Sweeps**
+- Skanna IP-ranges för att hitta TLS-tjänster
+- CIDR-notation: `192.168.1.0/24`
+- Range-notation: `10.0.0.1-50`
+- Auto-skapa endpoints med owner/criticality/webhook
+- Realtids-progress i webbgränssnittet
+
 ✅ **Intelligent Notifiering**
 - Skickar varningar vid 90, 60, 30, 14, 7, 3, 1 dagar före expiry
 - Färgkodade meddelanden i Mattermost (grön → gul → röd)
 - Undviker spam - samma varning skickas max en gång per 24h
 - Daglig sammanfattning av alla expiring certs
 - **Security alerts för self-signed och untrusted CA**
+- **Per-endpoint webhooks** för teamspecifika notifieringar
 
 ✅ **Persistent Storage**
 - SQLite databas spårar alla certs över tid
@@ -37,24 +45,29 @@ Ett säkerhetsverktyg som automatiskt övervakar TLS-certifikat på dina endpoin
 ```
 cert-guardian/
 ├── src/
-│   ├── main.py          # Huvudapplikation
-│   ├── scanner.py       # TLS scanner
-│   ├── notifier.py      # Mattermost integration
-│   └── database.py      # SQLite database layer
+│   ├── main.py           # Huvudapplikation
+│   ├── scanner.py        # TLS scanner
+│   ├── network_scanner.py # Network sweep scanner
+│   ├── notifier.py       # Mattermost integration
+│   └── database.py       # SQLite database layer
+├── backend/
+│   └── api.py            # FastAPI REST API
+├── frontend/
+│   └── src/pages/        # React components (Dashboard, Certificates, Endpoints, Sweeps, Security)
 ├── config/
-│   ├── config.yaml      # Din konfiguration
+│   ├── config.yaml       # Din konfiguration
 │   └── config.yaml.example
 ├── data/
-│   └── certificates.db  # SQLite databas (skapas automatiskt)
+│   └── certificates.db   # SQLite databas (skapas automatiskt)
 ├── kubernetes/
-│   └── deployment.yaml  # K8s manifests
+│   └── deployment.yaml   # K8s manifests
 ├── Dockerfile
 ├── docker-compose.yaml
+├── docker-compose-webapp.yaml  # Med webbgränssnitt
 ├── requirements.txt
-├── test.py              # Test suite
-├── README.md            # Användardokumentation
-├── INSTALL.md           # Installation guide
-└── ENHANCEMENTS.md      # Framtida features
+├── README.md             # Användardokumentation
+├── INSTALL.md            # Installation guide
+└── WEBAPP_README.md      # Webbapplikation dokumentation
 
 Systemd services:
 ├── cert-guardian.service           # Main service
@@ -289,6 +302,6 @@ MIT License - använd fritt i din organisation.
 
 ---
 
-**Skapad av:** AI/Security Team  
-**Version:** 1.0.0  
-**Datum:** 2025-02-02
+**Skapad av:** AI/Security Team
+**Version:** 1.2.0
+**Datum:** 2026-02-04

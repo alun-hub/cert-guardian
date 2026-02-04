@@ -3,6 +3,7 @@
 Database models for Certificate Guardian
 """
 import sqlite3
+import os
 from datetime import datetime
 from typing import Optional, List, Dict
 import json
@@ -13,10 +14,17 @@ class Database:
         self.db_path = db_path
         self.conn = None
         self._init_db()
-    
+
     def _init_db(self):
         """Initialize database schema"""
+        # Check if database file needs to be created
+        db_exists = os.path.exists(self.db_path)
+
         self.conn = sqlite3.connect(self.db_path)
+
+        # Set permissions to 666 for new databases (needed for Podman rootless)
+        if not db_exists and os.path.exists(self.db_path):
+            os.chmod(self.db_path, 0o666)
         self.conn.row_factory = sqlite3.Row
         
         cursor = self.conn.cursor()
@@ -101,7 +109,43 @@ class Database:
                 FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
             )
         """)
-        
+
+        # Network sweeps table (IP range scanning configurations)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sweeps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                target TEXT NOT NULL,
+                ports TEXT NOT NULL,
+                owner TEXT,
+                criticality TEXT DEFAULT 'medium',
+                webhook_url TEXT,
+                status TEXT DEFAULT 'pending',
+                progress_total INTEGER DEFAULT 0,
+                progress_scanned INTEGER DEFAULT 0,
+                progress_found INTEGER DEFAULT 0,
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                error_message TEXT
+            )
+        """)
+
+        # Sweep results table (individual scan results)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sweep_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sweep_id INTEGER NOT NULL,
+                ip_address TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                endpoint_id INTEGER,
+                scanned_at TEXT NOT NULL,
+                FOREIGN KEY (sweep_id) REFERENCES sweeps(id),
+                FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
+            )
+        """)
+
         self.conn.commit()
     
     def add_endpoint(self, host: str, port: int, owner: str = None, 
@@ -329,6 +373,106 @@ class Database:
         cursor.execute("SELECT webhook_url FROM endpoints WHERE id = ?", (endpoint_id,))
         row = cursor.fetchone()
         return row['webhook_url'] if row else None
+
+    # ==================== Sweep Methods ====================
+
+    def create_sweep(self, name: str, target: str, ports: List[int],
+                     owner: str = None, criticality: str = "medium",
+                     webhook_url: str = None) -> int:
+        """Create a new network sweep configuration"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        ports_json = json.dumps(ports)
+
+        cursor.execute("""
+            INSERT INTO sweeps (name, target, ports, owner, criticality, webhook_url, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (name, target, ports_json, owner, criticality, webhook_url, now))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_sweep(self, sweep_id: int) -> Optional[Dict]:
+        """Get sweep by ID"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM sweeps WHERE id = ?", (sweep_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_all_sweeps(self) -> List[Dict]:
+        """Get all sweeps"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM sweeps ORDER BY created_at DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_sweep_status(self, sweep_id: int, status: str,
+                            progress_scanned: int = None,
+                            progress_found: int = None,
+                            progress_total: int = None,
+                            started_at: str = None,
+                            completed_at: str = None,
+                            error_message: str = None) -> bool:
+        """Update sweep execution status and progress"""
+        cursor = self.conn.cursor()
+        updates = ["status = ?"]
+        params = [status]
+
+        if progress_scanned is not None:
+            updates.append("progress_scanned = ?")
+            params.append(progress_scanned)
+        if progress_found is not None:
+            updates.append("progress_found = ?")
+            params.append(progress_found)
+        if progress_total is not None:
+            updates.append("progress_total = ?")
+            params.append(progress_total)
+        if started_at is not None:
+            updates.append("started_at = ?")
+            params.append(started_at)
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+        params.append(sweep_id)
+        query = f"UPDATE sweeps SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, params)
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def add_sweep_result(self, sweep_id: int, ip_address: str, port: int,
+                         status: str, endpoint_id: int = None) -> int:
+        """Record individual sweep scan result"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+
+        cursor.execute("""
+            INSERT INTO sweep_results (sweep_id, ip_address, port, status, endpoint_id, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (sweep_id, ip_address, port, status, endpoint_id, now))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_sweep_results(self, sweep_id: int) -> List[Dict]:
+        """Get all results for a specific sweep"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM sweep_results
+            WHERE sweep_id = ?
+            ORDER BY scanned_at DESC
+        """, (sweep_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def delete_sweep(self, sweep_id: int) -> bool:
+        """Delete sweep and all its results"""
+        cursor = self.conn.cursor()
+        # Delete results first
+        cursor.execute("DELETE FROM sweep_results WHERE sweep_id = ?", (sweep_id,))
+        # Delete sweep
+        cursor.execute("DELETE FROM sweeps WHERE id = ?", (sweep_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def close(self):
         """Close database connection"""

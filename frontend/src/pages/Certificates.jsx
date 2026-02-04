@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Search, Filter, Lock, AlertCircle, CheckCircle, Shield } from 'lucide-react'
+import { Search, Filter, Lock, AlertCircle, CheckCircle, Shield, ChevronUp, ChevronDown } from 'lucide-react'
 import { certificateService } from '../services/api'
 import { format } from 'date-fns'
 
@@ -12,6 +12,7 @@ export default function Certificates() {
     selfSigned: null,
     untrusted: null,
   })
+  const [sortConfig, setSortConfig] = useState({ key: 'days_until_expiry', direction: 'asc' })
 
   const loadCertificates = async () => {
     try {
@@ -35,16 +36,66 @@ export default function Certificates() {
     loadCertificates()
   }, [filters])
 
-  const filteredCerts = certificates.filter(cert => {
-    if (!filters.search) return true
-    
-    const searchLower = filters.search.toLowerCase()
-    return (
-      cert.subject.toLowerCase().includes(searchLower) ||
-      cert.issuer.toLowerCase().includes(searchLower) ||
-      cert.endpoints?.some(ep => ep.host.toLowerCase().includes(searchLower))
-    )
-  })
+  const filteredCerts = certificates
+    .filter(cert => {
+      if (!filters.search) return true
+
+      const searchLower = filters.search.toLowerCase()
+      return (
+        cert.subject.toLowerCase().includes(searchLower) ||
+        cert.issuer.toLowerCase().includes(searchLower) ||
+        cert.endpoints?.some(ep => ep.host.toLowerCase().includes(searchLower))
+      )
+    })
+    .sort((a, b) => {
+      let aVal, bVal
+      switch (sortConfig.key) {
+        case 'subject':
+          aVal = a.subject.toLowerCase()
+          bVal = b.subject.toLowerCase()
+          break
+        case 'days_until_expiry':
+          aVal = a.days_until_expiry
+          bVal = b.days_until_expiry
+          break
+        case 'is_trusted_ca':
+          aVal = a.is_trusted_ca ? 1 : 0
+          bVal = b.is_trusted_ca ? 1 : 0
+          break
+        case 'endpoints':
+          aVal = a.endpoints?.[0]?.host || ''
+          bVal = b.endpoints?.[0]?.host || ''
+          break
+        default:
+          return 0
+      }
+      if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1
+      if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1
+      return 0
+    })
+
+  const handleSort = (key) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }))
+  }
+
+  const SortHeader = ({ label, sortKey }) => (
+    <th
+      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+      onClick={() => handleSort(sortKey)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        {sortConfig.key === sortKey && (
+          sortConfig.direction === 'asc'
+            ? <ChevronUp className="w-3 h-3" />
+            : <ChevronDown className="w-3 h-3" />
+        )}
+      </div>
+    </th>
+  )
 
   return (
     <div className="space-y-6">
@@ -85,15 +136,23 @@ export default function Certificates() {
             <option value="90">Expiring in 90 days</option>
           </select>
 
-          {/* Self-signed filter */}
+          {/* Trust filter */}
           <select
-            value={filters.selfSigned === null ? '' : filters.selfSigned}
-            onChange={(e) => setFilters({ ...filters, selfSigned: e.target.value === '' ? null : e.target.value === 'true' })}
+            value={filters.untrusted === null ? '' : (filters.untrusted ? 'untrusted' : 'trusted')}
+            onChange={(e) => {
+              if (e.target.value === '') {
+                setFilters({ ...filters, untrusted: null, selfSigned: null })
+              } else if (e.target.value === 'trusted') {
+                setFilters({ ...filters, untrusted: false, selfSigned: null })
+              } else {
+                setFilters({ ...filters, untrusted: true, selfSigned: null })
+              }
+            }}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">All Types</option>
-            <option value="false">Trusted Only</option>
-            <option value="true">Self-Signed Only</option>
+            <option value="trusted">Trusted Only</option>
+            <option value="untrusted">Untrusted Only</option>
           </select>
 
           {/* Clear filters */}
@@ -120,21 +179,13 @@ export default function Certificates() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Certificate
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Endpoints
-                </th>
+                <SortHeader label="Certificate" sortKey="subject" />
+                <SortHeader label="Endpoints" sortKey="endpoints" />
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Status
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Expires
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Trust
-                </th>
+                <SortHeader label="Expires" sortKey="days_until_expiry" />
+                <SortHeader label="Trust" sortKey="is_trusted_ca" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -147,6 +198,18 @@ export default function Certificates() {
       </div>
     </div>
   )
+}
+
+function extractCN(distinguishedName) {
+  if (!distinguishedName) return 'Unknown'
+  // Try to find commonName= or CN= in the string
+  const cnMatch = distinguishedName.match(/(?:commonName|CN)=([^,]+)/i)
+  if (cnMatch) return cnMatch[1].trim()
+  // Fallback: return first attribute value
+  const firstAttr = distinguishedName.split(',')[0]
+  const eqIndex = firstAttr.indexOf('=')
+  if (eqIndex > -1) return firstAttr.substring(eqIndex + 1).trim()
+  return distinguishedName
 }
 
 function CertificateRow({ cert }) {
@@ -200,10 +263,10 @@ function CertificateRow({ cert }) {
           <Lock className="w-5 h-5 text-gray-400 mt-1" />
           <div>
             <p className="font-medium text-gray-900">
-              {cert.subject.split(',')[0].replace('CN=', '')}
+              {extractCN(cert.subject)}
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              Issued by: {cert.issuer.split(',')[0].replace('CN=', '')}
+              Issued by: {extractCN(cert.issuer)}
             </p>
             <p className="text-xs text-gray-400 mt-1">
               {cert.fingerprint.substring(0, 16)}...

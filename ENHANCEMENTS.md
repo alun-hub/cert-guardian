@@ -373,23 +373,27 @@ class RegistryScanner:
 
 Rekommenderad prioritet baserat på value vs effort:
 
+**Completed ✅:**
+- REST API (FastAPI backend)
+- Web Dashboard (React frontend)
+- Network Sweeps (IP range scanning)
+- Per-endpoint webhooks
+
 **High Priority (Quick wins):**
 1. Filesystem Scanner
 2. Multi-Channel Notifications (Email, Slack)
-3. REST API
-4. Historical Trends
+3. Historical Trends
 
 **Medium Priority:**
-5. Automated Renewal (Let's Encrypt)
-6. Web Dashboard
-7. Certificate Chain Validation
+4. Automated Renewal (Let's Encrypt)
+5. Certificate Chain Validation
 
 **Low Priority (Nice to have):**
-8. LDAP/AD Integration
-9. SIEM Integration
-10. YubiKey Scanner
-11. Compliance Reporting
-12. Container Registry Integration
+6. LDAP/AD Integration
+7. SIEM Integration
+8. YubiKey Scanner
+9. Compliance Reporting
+10. Container Registry Integration
 
 ## Contributing
 

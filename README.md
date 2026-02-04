@@ -5,11 +5,13 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
 ## Funktioner
 
 - 📡 **Automatisk scanning** av TLS endpoints
+- 🌐 **Network Sweeps** - Skanna IP-ranges för att upptäcka TLS-tjänster (CIDR/range notation)
 - 💾 **SQLite databas** för att spåra certifikat över tid
 - 📨 **Mattermost notifieringar** vid olika varningsnivåer:
   - 90, 60, 30, 14, 7, 3, 1 dagar innan expiry
   - Färgkodade meddelanden (grön → gul → röd)
   - Dagliga sammanfattningar
+  - Per-endpoint webhooks för teamspecifika notifieringar
 - 🔍 **Spårar certifikathistorik** - ser när cert senast scannades
 - 🚫 **Undviker spam** - skickar inte samma varning flera gånger inom 24h
 - 🐳 **Containerized** - lätt att deploya med Podman/Docker
@@ -166,6 +168,8 @@ podman-compose -f docker-compose-webapp.yaml up -d
 
 - [x] ~~REST API för externa integrations~~
 - [x] ~~Web dashboard för överblick~~
+- [x] ~~Network Sweeps för IP-range scanning~~
+- [x] ~~Per-endpoint webhooks~~
 - [ ] Support för client certificate authentication
 - [ ] Filesystem scanning för .pem/.crt filer
 - [ ] LDAP/AD integration för user certificates
