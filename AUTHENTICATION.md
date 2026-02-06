@@ -185,7 +185,7 @@ Använd Pomerium som identity-aware proxy framför Certificate Guardian.
 ### Förberedelser
 
 1. Installera och konfigurera Pomerium
-2. Konfigurera identity provider (Google, Azure AD, Okta, etc.)
+2. Konfigurera identity provider (Google, Azure AD, Keycloak, Okta, etc.)
 3. Skapa policy för Certificate Guardian
 
 ### Pomerium Policy
@@ -211,6 +211,128 @@ routes:
             - domain:
                 is: example.com
     pass_identity_headers: true
+```
+
+### Pomerium med Keycloak som Identity Provider
+
+#### 1. Skapa Client i Keycloak för Pomerium
+
+1. Gå till **Clients** -> **Create client**
+2. Fyll i:
+   - **Client ID:** `pomerium`
+   - **Client type:** OpenID Connect
+   - **Client authentication:** On
+3. Under **Settings**:
+   - **Valid redirect URIs:** `https://authenticate.example.com/oauth2/callback`
+   - **Web origins:** `https://authenticate.example.com`
+4. Under **Credentials**, kopiera **Client secret**
+
+#### 2. Lägg till Groups Claim
+
+För att Pomerium ska kunna läsa grupptillhörighet:
+
+1. Gå till **Client scopes** -> **Create client scope**
+   - **Name:** `groups`
+   - **Type:** Default
+2. Under **Mappers** -> **Create mapper**:
+   - **Name:** `groups`
+   - **Mapper type:** Group Membership
+   - **Token claim name:** `groups`
+   - **Full group path:** Off (om du vill ha enkla gruppnamn)
+   - **Add to ID token:** On
+   - **Add to access token:** On
+   - **Add to userinfo:** On
+3. Gå till **Clients** -> `pomerium` -> **Client scopes**
+4. Lägg till `groups` scope som default
+
+#### 3. Skapa grupper i Keycloak
+
+1. Gå till **Groups** -> **Create group**
+2. Skapa grupper:
+   - `cert-admins`
+   - `cert-editors`
+3. Tilldela användare till grupperna under **Users** -> välj användare -> **Groups** -> **Join Group**
+
+#### 4. Pomerium konfiguration med Keycloak
+
+```yaml
+# pomerium-config.yaml
+authenticate_service_url: https://authenticate.example.com
+
+# Keycloak OIDC configuration
+idp_provider: oidc
+idp_provider_url: https://keycloak.example.com/realms/myrealm
+idp_client_id: pomerium
+idp_client_secret: your-pomerium-client-secret-from-keycloak
+
+# Request groups scope
+idp_scopes:
+  - openid
+  - profile
+  - email
+  - groups
+
+# Routes
+routes:
+  - from: https://certguardian.example.com
+    to: http://cert-guardian-frontend:80
+    policy:
+      - allow:
+          or:
+            - groups:
+                has: cert-admins
+            - groups:
+                has: cert-editors
+    pass_identity_headers: true
+
+  - from: https://certguardian.example.com
+    to: http://cert-guardian-backend:8000
+    prefix: /api
+    policy:
+      - allow:
+          or:
+            - groups:
+                has: cert-admins
+            - groups:
+                has: cert-editors
+    pass_identity_headers: true
+```
+
+#### 5. Certificate Guardian konfiguration
+
+```yaml
+auth:
+  mode: "proxy"
+  proxy:
+    jwt_issuer: "https://authenticate.example.com"
+    jwks_url: "https://authenticate.example.com/.well-known/pomerium/jwks.json"
+    email_header: "X-Pomerium-Claim-Email"
+    groups_header: "X-Pomerium-Claim-Groups"
+    jwt_header: "X-Pomerium-Jwt-Assertion"
+
+    # Mappa Keycloak-grupper till roller
+    admin_groups: ["cert-admins"]
+    editor_groups: ["cert-editors"]
+```
+
+#### Flöde: Pomerium + Keycloak
+
+```
+┌─────────┐     ┌──────────┐     ┌──────────────────┐
+│ Browser │────>│ Pomerium │────>│ Keycloak Login   │
+└─────────┘     └──────────┘     └──────────────────┘
+                                         │
+                                         v
+                              ┌──────────────────────┐
+                              │ Keycloak validerar   │
+                              │ användare + grupper  │
+                              └──────────────────────┘
+                                         │
+                                         v
+┌─────────┐     ┌──────────┐     ┌──────────────────┐
+│ Browser │<────│ Pomerium │<────│ Token + claims   │
+│         │     │ (headers)│     │ till backend     │
+└─────────┘     └──────────┘     └──────────────────┘
 ```
 
 ### Certificate Guardian Konfiguration
