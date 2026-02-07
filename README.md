@@ -76,6 +76,22 @@ Default admin-konto (local mode):
 - Användarnamn: `admin`
 - Lösenord: `admin` (ändra omedelbart!)
 
+### 4. HTTPS (valfritt)
+
+Aktivera inbyggd TLS genom att lägga certifikat i `certs/`:
+
+```bash
+mkdir -p certs/
+cp /path/to/cert.pem certs/tls.crt
+cp /path/to/key.pem certs/tls.key
+
+# Starta om frontend
+podman restart cert-guardian-frontend
+# HTTPS: https://localhost:3443
+```
+
+Utan certifikat fungerar allt som vanligt via HTTP.
+
 ## Dokumentation
 
 | Dokument | Beskrivning |

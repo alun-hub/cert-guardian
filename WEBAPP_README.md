@@ -324,10 +324,49 @@ server {
 ## Security Considerations
 
 ### HTTPS
-Always use HTTPS in production. Configure via:
-- Reverse proxy (nginx, Traefik)
-- Cloud load balancer
-- Let's Encrypt
+
+Certificate Guardian has built-in optional TLS support. Mount certificates to enable HTTPS directly:
+
+#### Built-in TLS (recommended for Kubernetes without ingress)
+
+```bash
+# Add your certificates
+mkdir -p certs/
+cp /path/to/cert.pem certs/tls.crt
+cp /path/to/key.pem certs/tls.key
+
+# Restart frontend (HTTPS auto-detected)
+podman restart cert-guardian-frontend
+# HTTPS: https://localhost:3443
+# HTTP automatically redirects to HTTPS
+```
+
+Self-signed certificate for testing:
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout certs/tls.key -out certs/tls.crt \
+  -days 365 -subj '/CN=certguardian.example.com'
+```
+
+Kubernetes with cert-manager — mount the TLS secret:
+```yaml
+volumes:
+  - name: tls
+    secret:
+      secretName: cert-guardian-tls
+containers:
+  - name: frontend
+    volumeMounts:
+      - name: tls
+        mountPath: /etc/nginx/certs
+        readOnly: true
+```
+
+Without certificates, the frontend serves HTTP only (default behavior).
+
+#### External Reverse Proxy (alternative)
+
+Use nginx, Traefik, or a cloud load balancer for TLS termination:
 
 ### CORS
 Update backend for production:

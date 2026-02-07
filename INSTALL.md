@@ -281,6 +281,32 @@ curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:8000/api/audit-logs
 ```
 
+### HTTPS (valfritt)
+
+Aktivera inbyggd TLS genom att montera certifikat:
+
+```bash
+mkdir -p certs/
+# Kopiera certifikat (från cert-manager, Let's Encrypt, eller self-signed)
+cp cert.pem certs/tls.crt
+cp key.pem certs/tls.key
+
+# Starta om frontend -- HTTPS aktiveras automatiskt
+podman restart cert-guardian-frontend
+
+# HTTPS: https://localhost:3443
+# HTTP omdirigeras automatiskt till HTTPS
+```
+
+Self-signed cert för test:
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout certs/tls.key -out certs/tls.crt \
+  -days 365 -subj '/CN=localhost'
+```
+
+Utan certifikat fungerar allt som vanligt via HTTP på port 3000.
+
 ### SIEM-forwarding (valfritt)
 
 Konfigurera i `config/config.yaml` eller via Settings (admin):

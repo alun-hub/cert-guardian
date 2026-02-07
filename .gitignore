@@ -16,6 +16,9 @@ dist/
 .vscode/
 *.swp
 
+# TLS certificates
+certs/
+
 # Local config and data
 config/config.yaml
 data/
