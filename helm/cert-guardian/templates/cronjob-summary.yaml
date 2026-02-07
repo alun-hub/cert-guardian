@@ -1,0 +1,50 @@
+{{- if .Values.summary.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cert-guardian.fullname" . }}-summary
+  labels:
+    {{- include "cert-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: summary
+spec:
+  schedule: {{ .Values.summary.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: summary
+              image: "{{ .Values.image.scanner.repository }}:{{ .Values.image.scanner.tag }}"
+              imagePullPolicy: {{ .Values.image.scanner.pullPolicy }}
+              command:
+                - python3
+                - /app/src/main.py
+                - --config
+                - /app/config/config.yaml
+                - --summary
+              volumeMounts:
+                - name: config
+                  mountPath: /app/config
+                  readOnly: true
+                - name: data
+                  mountPath: /app/data
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "cert-guardian.fullname" . }}-config
+            - name: data
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ include "cert-guardian.fullname" . }}-data
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+          restartPolicy: OnFailure
+{{- end }}

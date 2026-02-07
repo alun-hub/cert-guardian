@@ -21,6 +21,12 @@ from notifier import MattermostNotifier
 from auth import AuthManager, User, LocalAuthProvider
 from siem_client import SiemClient
 import yaml
+import time as _time
+
+from backend.metrics import (
+    update_certificate_metrics, set_app_info, get_metrics_output,
+    get_metrics_content_type, HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION,
+)
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "config.yaml"
 
@@ -42,6 +48,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Prometheus metrics middleware
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    path = request.url.path
+    # Skip metrics noise from scraping and health checks
+    if path in ("/metrics", "/health"):
+        return await call_next(request)
+    method = request.method
+    # Normalize path to avoid high cardinality (strip IDs)
+    endpoint = path.split("?")[0]
+    for part in endpoint.split("/"):
+        if part.isdigit():
+            endpoint = endpoint.replace(f"/{part}", "/{id}")
+    start = _time.time()
+    response = await call_next(request)
+    duration = _time.time() - start
+    HTTP_REQUESTS_TOTAL.labels(method=method, endpoint=endpoint, status=response.status_code).inc()
+    HTTP_REQUEST_DURATION.labels(method=method, endpoint=endpoint).observe(duration)
+    return response
+
 
 # Global instances
 db: Optional[Database] = None
@@ -205,6 +233,10 @@ async def startup_event():
     auth_config = config.get('auth', {'mode': 'local'})
     auth_manager = AuthManager(db, auth_config)
     siem_client = SiemClient(config.get("siem", {}))
+
+    # Initialize Prometheus app info
+    auth_mode = config.get("auth", {}).get("mode", "local")
+    set_app_info(version=app.version, auth_mode=auth_mode)
 
 
 @app.on_event("shutdown")
@@ -620,6 +652,14 @@ async def change_own_password(
 
 
 # Health check
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus metrics endpoint."""
+    if db:
+        update_certificate_metrics(db, config)
+    return Response(content=get_metrics_output(), media_type=get_metrics_content_type())
+
+
 @app.get("/health")
 async def health_check():
     return {

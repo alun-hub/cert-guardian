@@ -1,0 +1,115 @@
+image:
+  backend:
+    repository: cert-guardian-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: cert-guardian-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  scanner:
+    repository: cert-guardian
+    tag: latest
+    pullPolicy: IfNotPresent
+
+# Application configuration (generates config.yaml ConfigMap)
+config:
+  database:
+    path: "data/certificates.db"
+  mattermost:
+    webhookUrl: ""
+    channel: "#security-alerts"
+    username: "Certificate Guardian"
+    iconEmoji: ":lock:"
+  scanner:
+    intervalSeconds: 3600
+    timeoutSeconds: 10
+    maxConcurrent: 10
+  notifications:
+    warningDays: [90, 60, 30, 14, 7, 3, 1]
+    criticalDays: 7
+    emergencyDays: 1
+  auth:
+    mode: "local"
+    local:
+      accessTokenExpireMinutes: 15
+      refreshTokenExpireDays: 30
+  siem:
+    mode: "disabled"
+
+# Persistent storage for SQLite database
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: certguardian.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: cert-guardian-tls
+    #   hosts:
+    #     - certguardian.example.com
+
+# Frontend TLS (built-in, without ingress)
+frontendTls:
+  enabled: false
+  secretName: ""  # K8s TLS secret to mount at /etc/nginx/certs
+
+# Prometheus metrics
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    interval: 60s
+    namespace: ""  # defaults to release namespace
+
+# Daily summary CronJob
+summary:
+  enabled: true
+  schedule: "0 8 * * *"
+
+# Resource limits
+resources:
+  backend:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  frontend:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+  scanner:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# Security context for all pods
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Timezone
+timezone: "Europe/Stockholm"

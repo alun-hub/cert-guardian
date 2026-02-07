@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cert-guardian.fullname" . }}-config
+  labels:
+    {{- include "cert-guardian.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    database:
+      path: {{ .Values.config.database.path | quote }}
+
+    mattermost:
+      webhook_url: {{ .Values.config.mattermost.webhookUrl | quote }}
+      channel: {{ .Values.config.mattermost.channel | quote }}
+      username: {{ .Values.config.mattermost.username | quote }}
+      icon_emoji: {{ .Values.config.mattermost.iconEmoji | quote }}
+
+    endpoints: []
+
+    notifications:
+      warning_days: {{ .Values.config.notifications.warningDays | toJson }}
+      critical_days: {{ .Values.config.notifications.criticalDays }}
+      emergency_days: {{ .Values.config.notifications.emergencyDays }}
+
+    scanner:
+      interval_seconds: {{ .Values.config.scanner.intervalSeconds }}
+      timeout_seconds: {{ .Values.config.scanner.timeoutSeconds }}
+      max_concurrent: {{ .Values.config.scanner.maxConcurrent }}
+
+    auth:
+      mode: {{ .Values.config.auth.mode | quote }}
+      local:
+        access_token_expire_minutes: {{ .Values.config.auth.local.accessTokenExpireMinutes }}
+        refresh_token_expire_days: {{ .Values.config.auth.local.refreshTokenExpireDays }}
+
+    siem:
+      mode: {{ .Values.config.siem.mode | quote }}

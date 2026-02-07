@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cert-guardian.fullname" . }}-scanner
+  labels:
+    {{- include "cert-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scanner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cert-guardian.scannerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cert-guardian.scannerSelectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: scanner
+          image: "{{ .Values.image.scanner.repository }}:{{ .Values.image.scanner.tag }}"
+          imagePullPolicy: {{ .Values.image.scanner.pullPolicy }}
+          env:
+            - name: TZ
+              value: {{ .Values.timezone | quote }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: data
+              mountPath: /app/data
+          resources:
+            {{- toYaml .Values.resources.scanner | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cert-guardian.fullname" . }}-config
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "cert-guardian.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      restartPolicy: Always

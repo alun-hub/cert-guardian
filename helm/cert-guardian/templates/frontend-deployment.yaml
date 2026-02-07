@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cert-guardian.fullname" . }}-frontend
+  labels:
+    {{- include "cert-guardian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cert-guardian.frontendSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cert-guardian.frontendSelectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: frontend
+          image: "{{ .Values.image.frontend.repository }}:{{ .Values.image.frontend.tag }}"
+          imagePullPolicy: {{ .Values.image.frontend.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: https
+              containerPort: 443
+              protocol: TCP
+          {{- if .Values.frontendTls.enabled }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/nginx/certs
+              readOnly: true
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources.frontend | nindent 12 }}
+      {{- if .Values.frontendTls.enabled }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.frontendTls.secretName }}
+      {{- end }}
+      restartPolicy: Always

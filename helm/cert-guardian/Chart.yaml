@@ -1,0 +1,13 @@
+apiVersion: v2
+name: cert-guardian
+description: TLS certificate monitoring with Prometheus metrics and alerting
+type: application
+version: 0.1.0
+appVersion: "1.2.0"
+keywords:
+  - tls
+  - certificates
+  - monitoring
+  - security
+  - prometheus
+home: https://github.com/alun-hub/cert-guardian
