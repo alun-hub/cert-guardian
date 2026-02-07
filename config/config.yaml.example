@@ -34,6 +34,17 @@ scanner:
   timeout_seconds: 10
   max_concurrent: 10
 
+# SIEM forwarding (optional)
+siem:
+  mode: "disabled"  # disabled | syslog | beats
+  host: "siem.example.com"
+  port: 6514
+  tls_enabled: true
+  tls_verify: true
+  ca_pem: ""
+  client_cert_pem: ""
+  client_key_pem: ""
+
 # Authentication configuration
 auth:
   # Mode: "local", "proxy", or "oidc"

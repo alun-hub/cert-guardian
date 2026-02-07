@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 class CertificateGuardian:
     def __init__(self, config_path: str):
         """Initialize Certificate Guardian"""
+        self.config_path = config_path
         self.config = self._load_config(config_path)
         
         # Initialize components
@@ -106,6 +107,17 @@ class CertificateGuardian:
                 not_after=cert_info.not_after.isoformat(),
                 serial_number=cert_info.serial_number,
                 san_list=cert_info.san_list,
+                key_type=cert_info.key_type,
+                key_size=cert_info.key_size,
+                signature_algorithm=cert_info.signature_algorithm,
+                hostname_matches=cert_info.hostname_matches,
+                ocsp_present=cert_info.ocsp_present,
+                crl_present=cert_info.crl_present,
+                eku_server_auth=cert_info.eku_server_auth,
+                key_usage_digital_signature=cert_info.key_usage_digital_signature,
+                key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
+                chain_has_expiring=cert_info.chain_has_expiring,
+                weak_signature=cert_info.weak_signature,
                 is_self_signed=cert_info.is_self_signed,
                 is_trusted_ca=cert_info.is_trusted_ca,
                 validation_error=cert_info.validation_error,
@@ -113,7 +125,11 @@ class CertificateGuardian:
             )
             
             # Record successful scan
-            self.db.add_scan(cert_id, endpoint_id, 'success')
+            self.db.add_scan(
+                cert_id, endpoint_id, 'success',
+                tls_version=cert_info.tls_version,
+                cipher=cert_info.cipher
+            )
             
             # Check if we need to notify about expiry
             days_until_expiry = self.scanner.get_days_until_expiry(cert_info.not_after)
@@ -233,6 +249,7 @@ class CertificateGuardian:
         while True:
             try:
                 self.run_once()
+                interval = self._get_interval_seconds(interval)
                 logger.info(f"Sleeping for {interval} seconds...")
                 time.sleep(interval)
             except KeyboardInterrupt:
@@ -241,6 +258,21 @@ class CertificateGuardian:
             except Exception as e:
                 logger.error(f"Error in scan cycle: {e}", exc_info=True)
                 time.sleep(60)  # Wait a minute before retrying
+
+    def _get_interval_seconds(self, current_interval: int) -> int:
+        """Reload interval from config file if updated"""
+        try:
+            with open(self.config_path, 'r') as f:
+                latest = yaml.safe_load(f) or {}
+            new_interval = int(latest.get('scanner', {}).get('interval_seconds', current_interval))
+            if new_interval <= 0:
+                return current_interval
+            if new_interval != current_interval:
+                logger.info(f"Updated scan interval to {new_interval}s from config")
+            return new_interval
+        except Exception as e:
+            logger.warning(f"Failed to reload scan interval: {e}")
+            return current_interval
 
 
 def main():

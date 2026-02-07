@@ -49,11 +49,12 @@ cert-guardian/
 │   ├── scanner.py        # TLS scanner
 │   ├── network_scanner.py # Network sweep scanner
 │   ├── notifier.py       # Mattermost integration
+│   ├── siem_client.py    # SIEM forwarding (syslog/beats)
 │   └── database.py       # SQLite database layer
 ├── backend/
 │   └── api.py            # FastAPI REST API
 ├── frontend/
-│   └── src/pages/        # React components (Dashboard, Certificates, Endpoints, Sweeps, Security)
+│   └── src/pages/        # React components (Dashboard, Certificates, Endpoints, Sweeps, Security, Audit Logs, About)
 ├── config/
 │   ├── config.yaml       # Din konfiguration
 │   └── config.yaml.example

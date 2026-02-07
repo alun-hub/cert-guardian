@@ -281,6 +281,32 @@ curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:8000/api/audit-logs
 ```
 
+### SIEM-forwarding (valfritt)
+
+Konfigurera i `config/config.yaml` eller via Settings (admin):
+
+```yaml
+siem:
+  mode: "syslog"   # disabled | syslog | beats
+  host: "siem.example.com"
+  port: 6514
+  tls_enabled: true
+  tls_verify: true
+  ca_pem: ""
+  client_cert_pem: ""
+  client_key_pem: ""
+```
+
+Testa via UI eller API:
+
+```bash
+TOKEN="admin-jwt-token"
+curl -X POST http://localhost:8000/api/settings/siem/test \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Test event"}'
+```
+
 ---
 
 ## Troubleshooting

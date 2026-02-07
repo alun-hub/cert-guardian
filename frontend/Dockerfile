@@ -11,6 +11,10 @@ RUN npm run build
 # Production image
 FROM docker.io/nginx:alpine
 
+# Timezone support
+RUN apk add --no-cache tzdata
+ENV TZ=Europe/Stockholm
+
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

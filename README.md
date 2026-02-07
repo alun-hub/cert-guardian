@@ -15,6 +15,11 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
 - **Spårar certifikathistorik** - ser när cert senast scannades
 - **Undviker spam** - skickar inte samma varning flera gånger inom 24h
 - **Containerized** - lätt att deploya med Podman/Docker
+- **Detaljerad certifikatvy** - klicka för att se SAN, key size, signature, TLS version/cipher m.m.
+- **Säkerhetskontroller** - hostname match, OCSP/CRL, EKU/Key Usage, weak signatures, expiring chain
+- **UI-badges** - snabba varningsflaggor i certifikatlistan
+- **Endpoint-trend** - mini-graf över senaste scanningsstatus per endpoint
+- **Audit logs** - adminvy med filter och historik över användaråtgärder
 
 ### Nya funktioner
 
@@ -31,6 +36,11 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
   - Vem skapar/ändrar/tar bort resurser
   - IP-adresser loggas
 - **Custom CA Management** - Lägg till egna root-certifikat för intern PKI
+- **Scanner settings i UI** - ändra scan-intervall direkt i Settings (admin)
+- **Database Health panel** - storlek, antal rader och scan-volym
+- **SIEM-forwarding** - Syslog eller Beats med TLS (testknapp i UI)
+- **Rescan i sweeps** - starta om befintliga nätverkssvep
+- **Ägarskap för endpoints/sweeps** - bara skaparen/admin kan ändra/ta bort
 
 ## Snabbstart
 
@@ -89,6 +99,7 @@ Default admin-konto (local mode):
 | Hantera trusted CAs | ❌ | ✅ | ✅ |
 | Användarhantering | ❌ | ❌ | ✅ |
 | Visa audit logs | ❌ | ❌ | ✅ |
+| Konfigurera SIEM | ❌ | ❌ | ✅ |
 
 ## Konfigurationsexempel
 
@@ -116,6 +127,16 @@ scanner:
   interval_seconds: 3600
   timeout_seconds: 10
   max_concurrent: 10
+
+siem:
+  mode: "disabled"  # disabled | syslog | beats
+  host: "siem.example.com"
+  port: 6514
+  tls_enabled: true
+  tls_verify: true
+  ca_pem: ""
+  client_cert_pem: ""
+  client_key_pem: ""
 
 auth:
   mode: "local"

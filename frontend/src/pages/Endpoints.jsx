@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle, Loader2, Search, ChevronUp, ChevronDown } from 'lucide-react'
 import { endpointService, scanService } from '../services/api'
+import api from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
-
-const API_BASE = '/api'
+import { format } from 'date-fns'
 
 export default function Endpoints() {
-  const { isEditor } = useAuth()
+  const { isEditor, isAdmin, user } = useAuth()
   const [endpoints, setEndpoints] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -152,6 +152,42 @@ export default function Endpoints() {
     </th>
   )
 
+  const canManageEndpoint = (endpoint) => {
+    if (!isEditor) return false
+    if (isAdmin) return true
+    if (!endpoint?.created_by) return true
+    return endpoint.created_by === user?.email
+  }
+
+  const renderScanTrend = (scans) => {
+    if (!Array.isArray(scans) || scans.length === 0) {
+      return <span className="text-sm text-gray-400">-</span>
+    }
+
+    const ordered = [...scans].reverse()
+    return (
+      <div className="flex items-end gap-1">
+        {ordered.map((scan, index) => {
+          const status = scan.status
+          const color =
+            status === 'success' ? 'bg-green-500' :
+            status === 'failed' ? 'bg-red-500' :
+            'bg-gray-300'
+          const title = scan.scanned_at
+            ? `${status} • ${format(new Date(scan.scanned_at), 'MMM dd HH:mm')}`
+            : status
+          return (
+            <span
+              key={`${status}-${index}`}
+              className={`w-2 h-4 ${color} rounded-sm`}
+              title={title}
+            />
+          )
+        })}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -250,19 +286,20 @@ export default function Endpoints() {
               <SortHeader label="Criticality" sortKey="criticality" />
               <SortHeader label="Webhook" sortKey="webhook" />
               <SortHeader label="Expires" sortKey="expires" />
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Recent</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan="7" className="px-4 py-8 text-center">
+                <td colSpan="8" className="px-4 py-8 text-center">
                   <Loader2 className="w-8 h-8 mx-auto animate-spin text-blue-500" />
                 </td>
               </tr>
             ) : filteredEndpoints.length === 0 ? (
               <tr>
-                <td colSpan="7" className="px-4 py-8 text-center text-gray-500">
+                <td colSpan="8" className="px-4 py-8 text-center text-gray-500">
                   <Server className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                   <p>{endpoints.length === 0 ? 'No endpoints configured. Add your first endpoint to start monitoring.' : 'No endpoints match the current filters.'}</p>
                 </td>
@@ -301,6 +338,9 @@ export default function Endpoints() {
                       )}
                     </td>
                     <td className="px-4 py-3">
+                      {renderScanTrend(endpoint.recent_scans)}
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
                         {isEditor && (
                           <>
@@ -316,20 +356,24 @@ export default function Endpoints() {
                                 <Play className="w-4 h-4" />
                               )}
                             </button>
-                            <button
-                              onClick={() => setEditingEndpoint(endpoint)}
-                              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                              title="Edit"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(endpoint.id)}
-                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {canManageEndpoint(endpoint) && (
+                              <>
+                                <button
+                                  onClick={() => setEditingEndpoint(endpoint)}
+                                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                                  title="Edit"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(endpoint.id)}
+                                  className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
                           </>
                         )}
                       </div>
@@ -387,17 +431,11 @@ function AddEndpointModal({ onClose, onSuccess }) {
       setTestingWebhook(true)
       setWebhookResult(null)
 
-      const response = await fetch(`${API_BASE}/webhooks/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          webhook_url: formData.webhook_url,
-          message: `Test notification for ${formData.host || 'new endpoint'}:${formData.port}`
-        })
+      const response = await api.post('/webhooks/test', {
+        webhook_url: formData.webhook_url,
+        message: `Test notification for ${formData.host || 'new endpoint'}:${formData.port}`
       })
-
-      const data = await response.json()
-      setWebhookResult(data)
+      setWebhookResult(response.data)
     } catch (error) {
       setWebhookResult({ success: false, message: error.message })
     } finally {
@@ -580,17 +618,11 @@ function EditEndpointModal({ endpoint, onClose, onSuccess }) {
       setTestingWebhook(true)
       setWebhookResult(null)
 
-      const response = await fetch(`${API_BASE}/webhooks/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          webhook_url: formData.webhook_url,
-          message: `Test notification for ${endpoint.host}:${endpoint.port}`
-        })
+      const response = await api.post('/webhooks/test', {
+        webhook_url: formData.webhook_url,
+        message: `Test notification for ${endpoint.host}:${endpoint.port}`
       })
-
-      const data = await response.json()
-      setWebhookResult(data)
+      setWebhookResult(response.data)
     } catch (error) {
       setWebhookResult({ success: false, message: error.message })
     } finally {

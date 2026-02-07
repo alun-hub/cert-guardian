@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sys
 import logging
 from pathlib import Path
@@ -19,7 +19,10 @@ from database import Database
 from scanner import TLSScanner
 from notifier import MattermostNotifier
 from auth import AuthManager, User, LocalAuthProvider
+from siem_client import SiemClient
 import yaml
+
+CONFIG_PATH = Path(__file__).parent.parent / "config" / "config.yaml"
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,7 @@ scanner: Optional[TLSScanner] = None
 notifier: Optional[MattermostNotifier] = None
 config: Optional[Dict] = None
 auth_manager: Optional[AuthManager] = None
+siem_client: Optional[SiemClient] = None
 
 
 # Pydantic models
@@ -105,13 +109,50 @@ class PasswordChange(BaseModel):
     new_password: str
 
 
+class ScannerSettingsUpdate(BaseModel):
+    interval_seconds: Optional[int] = None
+
+
+class DbHealth(BaseModel):
+    db_size_bytes: int
+    page_size: int
+    page_count: int
+    freelist_count: int
+    approx_db_bytes: int
+    approx_free_bytes: int
+    counts: Dict[str, int]
+    scans_last_30_days: int
+
+
+class SiemSettings(BaseModel):
+    mode: str  # "disabled" | "syslog" | "beats"
+    host: Optional[str] = None
+    port: Optional[int] = None
+    tls_enabled: bool = True
+    tls_verify: bool = True
+    ca_pem: Optional[str] = None
+    client_cert_pem: Optional[str] = None
+    client_key_pem: Optional[str] = None
+
+
+class SiemTestRequest(BaseModel):
+    message: Optional[str] = "Test event from Certificate Guardian"
+
+
 class DashboardStats(BaseModel):
     total_certificates: int
     total_endpoints: int
-    expiring_soon: int  # Within 30 days
+    expiring_7: int
+    expiring_30: int
+    expiring_90: int
     expired: int
     self_signed: int
     untrusted: int
+    last_scan_at: Optional[str]
+    last_scan_status: Optional[str]
+    weak_keys: int
+    legacy_tls: int
+    cert_changes_24h: int
 
 
 class CertificateInfo(BaseModel):
@@ -132,10 +173,10 @@ class CertificateInfo(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     global db, scanner, notifier, config, auth_manager
+    global siem_client
 
     # Load config
-    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-    with open(config_path) as f:
+    with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
 
     # Initialize database
@@ -163,6 +204,7 @@ async def startup_event():
     # Initialize authentication
     auth_config = config.get('auth', {'mode': 'local'})
     auth_manager = AuthManager(db, auth_config)
+    siem_client = SiemClient(config.get("siem", {}))
 
 
 @app.on_event("shutdown")
@@ -230,6 +272,34 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def audit_log(user_email: str, action: str, resource_type: str = None,
+              resource_id: int = None, details: str = None,
+              ip_address: str = None):
+    """Persist audit log entry and forward to SIEM if configured."""
+    if not db:
+        return
+    log_id = db.add_audit_log(
+        user_email=user_email,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        details=details,
+        ip_address=ip_address
+    )
+    if siem_client:
+        event = {
+            "audit_id": log_id,
+            "user_email": user_email,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "details": details,
+            "ip_address": ip_address,
+            "created_at": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+        }
+        siem_client.send_event(event)
+
+
 @app.post("/api/auth/login")
 async def login(login_request: LoginRequest, request: Request, response: Response):
     """Login with username/password (local mode only)"""
@@ -245,7 +315,7 @@ async def login(login_request: LoginRequest, request: Request, response: Respons
     result = auth_manager.login(login_request.username, login_request.password)
     if not result:
         # Log failed login attempt
-        db.add_audit_log(
+        audit_log(
             user_email=login_request.username,
             action="login_failed",
             details="Invalid username or password",
@@ -254,7 +324,7 @@ async def login(login_request: LoginRequest, request: Request, response: Respons
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     # Log successful login
-    db.add_audit_log(
+    audit_log(
         user_email=result["user"]["email"],
         action="login",
         details=f"User logged in successfully",
@@ -323,7 +393,7 @@ async def logout(request: Request, response: Response, user: User = Depends(get_
 
     # Log logout
     if user:
-        db.add_audit_log(
+        audit_log(
             user_email=user.email,
             action="logout",
             ip_address=get_client_ip(request)
@@ -377,7 +447,7 @@ async def create_user(user_data: UserCreate, request: Request, admin: User = Dep
     )
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=admin.email,
         action="user_create",
         resource_type="user",
@@ -441,7 +511,7 @@ async def update_user(
         db.update_user(user_id, **updates)
 
         # Audit log
-        db.add_audit_log(
+        audit_log(
             user_email=admin.email,
             action="user_update",
             resource_type="user",
@@ -479,7 +549,7 @@ async def delete_user(user_id: int, request: Request, admin: User = Depends(requ
     db.delete_user(user_id)
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=admin.email,
         action="user_delete",
         resource_type="user",
@@ -573,9 +643,28 @@ async def get_dashboard_stats():
     cursor.execute("SELECT COUNT(*) FROM endpoints")
     total_endpoints = cursor.fetchone()[0]
     
-    # Expiring soon (30 days)
-    expiring = db.get_expiring_certificates(30)
-    expiring_soon = len(expiring)
+    # Expiring soon (7/30/90 days)
+    cursor.execute("""
+        SELECT COUNT(DISTINCT c.id)
+        FROM certificates c
+        WHERE julianday(c.not_after) - julianday('now') <= 7
+        AND julianday(c.not_after) - julianday('now') > 0
+    """)
+    expiring_7 = cursor.fetchone()[0]
+    cursor.execute("""
+        SELECT COUNT(DISTINCT c.id)
+        FROM certificates c
+        WHERE julianday(c.not_after) - julianday('now') <= 30
+        AND julianday(c.not_after) - julianday('now') > 0
+    """)
+    expiring_30 = cursor.fetchone()[0]
+    cursor.execute("""
+        SELECT COUNT(DISTINCT c.id)
+        FROM certificates c
+        WHERE julianday(c.not_after) - julianday('now') <= 90
+        AND julianday(c.not_after) - julianday('now') > 0
+    """)
+    expiring_90 = cursor.fetchone()[0]
     
     # Expired
     cursor.execute("""
@@ -592,14 +681,80 @@ async def get_dashboard_stats():
     # Untrusted
     cursor.execute("SELECT COUNT(*) FROM certificates WHERE is_trusted_ca = 0")
     untrusted = cursor.fetchone()[0]
+
+    # Last scan
+    cursor.execute("""
+        SELECT scanned_at, status
+        FROM certificate_scans
+        ORDER BY scanned_at DESC
+        LIMIT 1
+    """)
+    last_scan = cursor.fetchone()
+    last_scan_at = last_scan['scanned_at'] if last_scan else None
+    last_scan_status = last_scan['status'] if last_scan else None
+
+    # Weak keys (RSA < 2048, EC < 256, DSA < 2048)
+    cursor.execute("""
+        SELECT COUNT(DISTINCT id)
+        FROM certificates
+        WHERE (
+            (key_type = 'RSA' AND key_size IS NOT NULL AND key_size < 2048) OR
+            (key_type = 'EC' AND key_size IS NOT NULL AND key_size < 256) OR
+            (key_type = 'DSA' AND key_size IS NOT NULL AND key_size < 2048)
+        )
+    """)
+    weak_keys = cursor.fetchone()[0]
+
+    # Legacy TLS (latest scan per endpoint with TLS < 1.2)
+    cursor.execute("""
+        WITH latest_scans AS (
+            SELECT cs.*
+            FROM certificate_scans cs
+            JOIN (
+                SELECT endpoint_id, MAX(scanned_at) AS max_scanned
+                FROM certificate_scans
+                GROUP BY endpoint_id
+            ) ls
+            ON cs.endpoint_id = ls.endpoint_id AND cs.scanned_at = ls.max_scanned
+        )
+        SELECT COUNT(*) FROM latest_scans
+        WHERE tls_version IN ('TLSv1', 'TLSv1.1')
+    """)
+    legacy_tls = cursor.fetchone()[0]
+
+    # Certificate changes in last 24h (latest cert differs from previous per endpoint)
+    cursor.execute("""
+        WITH ordered AS (
+            SELECT
+                endpoint_id,
+                certificate_id,
+                scanned_at,
+                ROW_NUMBER() OVER (PARTITION BY endpoint_id ORDER BY scanned_at DESC) AS rn,
+                LAG(certificate_id) OVER (PARTITION BY endpoint_id ORDER BY scanned_at DESC) AS prev_cert_id
+            FROM certificate_scans
+        )
+        SELECT COUNT(*) FROM ordered
+        WHERE rn = 1
+          AND prev_cert_id IS NOT NULL
+          AND certificate_id != prev_cert_id
+          AND julianday('now') - julianday(scanned_at) <= 1
+    """)
+    cert_changes_24h = cursor.fetchone()[0]
     
     return DashboardStats(
         total_certificates=total_certs,
         total_endpoints=total_endpoints,
-        expiring_soon=expiring_soon,
+        expiring_7=expiring_7,
+        expiring_30=expiring_30,
+        expiring_90=expiring_90,
         expired=expired,
         self_signed=self_signed,
-        untrusted=untrusted
+        untrusted=untrusted,
+        last_scan_at=last_scan_at,
+        last_scan_status=last_scan_status,
+        weak_keys=weak_keys,
+        legacy_tls=legacy_tls,
+        cert_changes_24h=cert_changes_24h
     )
 
 
@@ -627,6 +782,14 @@ async def get_certificates(
             c.is_trusted_ca,
             c.validation_error,
             c.chain_length,
+            c.hostname_matches,
+            c.ocsp_present,
+            c.crl_present,
+            c.eku_server_auth,
+            c.key_usage_digital_signature,
+            c.key_usage_key_encipherment,
+            c.chain_has_expiring,
+            c.weak_signature,
             julianday(c.not_after) - julianday('now') as days_until_expiry
         FROM certificates c
         WHERE 1=1
@@ -680,6 +843,211 @@ async def get_certificates(
     }
 
 
+@app.get("/api/settings/scanner")
+async def get_scanner_settings(user: User = Depends(require_auth)):
+    """Get scanner settings"""
+    scanner_config = config.get("scanner", {}) if config else {}
+    return {
+        "interval_seconds": scanner_config.get("interval_seconds", 3600),
+        "timeout_seconds": scanner_config.get("timeout_seconds", 10),
+        "max_concurrent": scanner_config.get("max_concurrent", 10)
+    }
+
+
+@app.put("/api/settings/scanner")
+async def update_scanner_settings(
+    settings: ScannerSettingsUpdate,
+    request: Request,
+    user: User = Depends(require_admin)
+):
+    """Update scanner settings (admin only)"""
+    if not config:
+        raise HTTPException(status_code=500, detail="Configuration not loaded")
+
+    if settings.interval_seconds is None:
+        raise HTTPException(status_code=400, detail="No settings provided")
+
+    interval = int(settings.interval_seconds)
+    if interval < 10 or interval > 86400:
+        raise HTTPException(status_code=400, detail="interval_seconds must be between 10 and 86400")
+
+    config.setdefault("scanner", {})
+    config["scanner"]["interval_seconds"] = interval
+
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    audit_log(
+        user_email=user.email,
+        action="scanner_settings_update",
+        resource_type="settings",
+        resource_id=None,
+        details=f"Updated scanner interval to {interval} seconds",
+        ip_address=get_client_ip(request)
+    )
+
+    return {
+        "interval_seconds": interval,
+        "timeout_seconds": config["scanner"].get("timeout_seconds", 10),
+        "max_concurrent": config["scanner"].get("max_concurrent", 10)
+    }
+
+
+@app.get("/api/settings/db-health", response_model=DbHealth)
+async def get_db_health(admin: User = Depends(require_admin)):
+    """Get database health and size stats (admin only)"""
+    if not config:
+        raise HTTPException(status_code=500, detail="Configuration not loaded")
+
+    db_path = Path(__file__).parent.parent / config['database']['path']
+    db_size_bytes = db_path.stat().st_size if db_path.exists() else 0
+
+    cursor = db.conn.cursor()
+    tables = [
+        "certificates",
+        "certificate_scans",
+        "endpoints",
+        "sweeps",
+        "sweep_results",
+        "trusted_cas",
+        "notifications",
+        "audit_log"
+    ]
+    counts: Dict[str, int] = {}
+    for table in tables:
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            counts[table] = cursor.fetchone()[0]
+        except Exception:
+            counts[table] = 0
+
+    try:
+        cursor.execute("SELECT COUNT(*) FROM certificate_scans WHERE julianday('now') - julianday(scanned_at) <= 30")
+        scans_last_30_days = cursor.fetchone()[0]
+    except Exception:
+        scans_last_30_days = 0
+
+    try:
+        cursor.execute("PRAGMA page_size")
+        page_size = cursor.fetchone()[0]
+        cursor.execute("PRAGMA page_count")
+        page_count = cursor.fetchone()[0]
+        cursor.execute("PRAGMA freelist_count")
+        freelist_count = cursor.fetchone()[0]
+    except Exception:
+        page_size = 0
+        page_count = 0
+        freelist_count = 0
+
+    return DbHealth(
+        db_size_bytes=db_size_bytes,
+        page_size=page_size,
+        page_count=page_count,
+        freelist_count=freelist_count,
+        approx_db_bytes=page_size * page_count,
+        approx_free_bytes=page_size * freelist_count,
+        counts=counts,
+        scans_last_30_days=scans_last_30_days
+    )
+
+
+@app.get("/api/settings/siem", response_model=SiemSettings)
+async def get_siem_settings(admin: User = Depends(require_admin)):
+    """Get SIEM forwarding settings (admin only)"""
+    siem = (config or {}).get("siem", {}) if config else {}
+    return SiemSettings(
+        mode=siem.get("mode", "disabled"),
+        host=siem.get("host"),
+        port=siem.get("port"),
+        tls_enabled=siem.get("tls_enabled", True),
+        tls_verify=siem.get("tls_verify", True),
+        ca_pem=siem.get("ca_pem"),
+        client_cert_pem=siem.get("client_cert_pem"),
+        client_key_pem=siem.get("client_key_pem")
+    )
+
+
+@app.put("/api/settings/siem", response_model=SiemSettings)
+async def update_siem_settings(
+    settings: SiemSettings,
+    request: Request,
+    admin: User = Depends(require_admin)
+):
+    """Update SIEM forwarding settings (admin only)"""
+    if not config:
+        raise HTTPException(status_code=500, detail="Configuration not loaded")
+
+    mode = settings.mode.lower()
+    if mode not in {"disabled", "syslog", "beats"}:
+        raise HTTPException(status_code=400, detail="mode must be disabled, syslog, or beats")
+
+    if mode != "disabled":
+        if not settings.host or not settings.port:
+            raise HTTPException(status_code=400, detail="host and port are required for syslog or beats")
+        if settings.port <= 0 or settings.port > 65535:
+            raise HTTPException(status_code=400, detail="port must be between 1 and 65535")
+
+    config["siem"] = {
+        "mode": mode,
+        "host": settings.host,
+        "port": settings.port,
+        "tls_enabled": bool(settings.tls_enabled),
+        "tls_verify": bool(settings.tls_verify),
+        "ca_pem": settings.ca_pem,
+        "client_cert_pem": settings.client_cert_pem,
+        "client_key_pem": settings.client_key_pem
+    }
+
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    audit_log(
+        user_email=admin.email,
+        action="siem_settings_update",
+        resource_type="settings",
+        resource_id=None,
+        details=f"Updated SIEM settings: mode={mode}",
+        ip_address=get_client_ip(request)
+    )
+
+    if siem_client:
+        siem_client.configure(config["siem"])
+
+    return SiemSettings(**config["siem"])
+
+
+@app.post("/api/settings/siem/test")
+async def test_siem_settings(
+    body: SiemTestRequest,
+    request: Request,
+    admin: User = Depends(require_admin)
+):
+    """Send a test SIEM event (admin only)"""
+    if not siem_client:
+        raise HTTPException(status_code=500, detail="SIEM client not initialized")
+
+    event = {
+        "audit_id": None,
+        "user_email": admin.email,
+        "action": "siem_test",
+        "resource_type": "settings",
+        "resource_id": None,
+        "details": body.message,
+        "ip_address": get_client_ip(request),
+        "created_at": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+    }
+    ok = siem_client.send_event(event)
+    if not ok:
+        raise HTTPException(status_code=502, detail="Failed to send test event to SIEM")
+    return {"status": "sent"}
+
+
 # Get single certificate details
 @app.get("/api/certificates/{cert_id}")
 async def get_certificate(cert_id: int):
@@ -699,10 +1067,17 @@ async def get_certificate(cert_id: int):
         raise HTTPException(status_code=404, detail="Certificate not found")
     
     cert_dict = dict(row)
+    # Parse SAN list JSON if present
+    if cert_dict.get('san_list'):
+        try:
+            import json
+            cert_dict['san_list'] = json.loads(cert_dict['san_list'])
+        except Exception:
+            pass
     
     # Get endpoints
     cursor.execute("""
-        SELECT e.*, cs.scanned_at, cs.status
+        SELECT e.*, cs.scanned_at, cs.status, cs.tls_version, cs.cipher
         FROM endpoints e
         JOIN certificate_scans cs ON e.id = cs.endpoint_id
         WHERE cs.certificate_id = ?
@@ -750,6 +1125,15 @@ async def get_endpoints():
             endpoint['last_scan'] = dict(last_scan)
         else:
             endpoint['last_scan'] = None
+
+        cursor.execute("""
+            SELECT cs.scanned_at, cs.status
+            FROM certificate_scans cs
+            WHERE cs.endpoint_id = ?
+            ORDER BY cs.scanned_at DESC
+            LIMIT 12
+        """, (endpoint['id'],))
+        endpoint['recent_scans'] = [dict(scan) for scan in cursor.fetchall()]
     
     return {"endpoints": endpoints}
 
@@ -762,15 +1146,25 @@ async def create_endpoint(
     user: User = Depends(require_editor)
 ):
     """Add new endpoint to monitor (editor+)"""
+    # If endpoint exists, only creator or admin can modify it via create
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT * FROM endpoints WHERE host = ? AND port = ?", (endpoint.host, endpoint.port))
+    existing = cursor.fetchone()
+    if existing:
+        existing_dict = dict(existing)
+        if existing_dict.get('created_by') and existing_dict['created_by'] != user.email and not user.has_role("admin"):
+            raise HTTPException(status_code=403, detail="Only the creator or an admin can modify this endpoint")
+
     endpoint_id = db.add_endpoint(
         host=endpoint.host,
         port=endpoint.port,
         owner=endpoint.owner,
-        criticality=endpoint.criticality
+        criticality=endpoint.criticality,
+        created_by=user.email
     )
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=user.email,
         action="endpoint_create",
         resource_type="endpoint",
@@ -800,6 +1194,8 @@ async def update_endpoint(
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
     endpoint_dict = dict(endpoint)
+    if endpoint_dict.get('created_by') and endpoint_dict['created_by'] != user.email and not user.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Only the creator or an admin can modify this endpoint")
 
     # Update
     updates = []
@@ -828,7 +1224,7 @@ async def update_endpoint(
         db.conn.commit()
 
         # Audit log
-        db.add_audit_log(
+        audit_log(
             user_email=user.email,
             action="endpoint_update",
             resource_type="endpoint",
@@ -857,6 +1253,8 @@ async def delete_endpoint(
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
     endpoint_dict = dict(endpoint)
+    if endpoint_dict.get('created_by') and endpoint_dict['created_by'] != user.email and not user.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Only the creator or an admin can delete this endpoint")
 
     # Find certificates that will become orphaned after this endpoint is deleted
     cursor.execute("""
@@ -886,7 +1284,7 @@ async def delete_endpoint(
     db.conn.commit()
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=user.email,
         action="endpoint_delete",
         resource_type="endpoint",
@@ -933,12 +1331,27 @@ async def trigger_scan(
                     not_after=cert_info.not_after.isoformat(),
                     serial_number=cert_info.serial_number,
                     san_list=cert_info.san_list,
+                    key_type=cert_info.key_type,
+                    key_size=cert_info.key_size,
+                    signature_algorithm=cert_info.signature_algorithm,
+                    hostname_matches=cert_info.hostname_matches,
+                    ocsp_present=cert_info.ocsp_present,
+                    crl_present=cert_info.crl_present,
+                    eku_server_auth=cert_info.eku_server_auth,
+                    key_usage_digital_signature=cert_info.key_usage_digital_signature,
+                    key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
+                    chain_has_expiring=cert_info.chain_has_expiring,
+                    weak_signature=cert_info.weak_signature,
                     is_self_signed=cert_info.is_self_signed,
                     is_trusted_ca=cert_info.is_trusted_ca,
                     validation_error=cert_info.validation_error,
                     chain_length=cert_info.chain_length
                 )
-                db.add_scan(cert_id, endpoint_id, 'success')
+                db.add_scan(
+                    cert_id, endpoint_id, 'success',
+                    tls_version=cert_info.tls_version,
+                    cipher=cert_info.cipher
+                )
         else:
             # Scan all endpoints
             endpoints = db.get_all_endpoints()
@@ -954,17 +1367,32 @@ async def trigger_scan(
                         not_after=cert_info.not_after.isoformat(),
                         serial_number=cert_info.serial_number,
                         san_list=cert_info.san_list,
+                        key_type=cert_info.key_type,
+                        key_size=cert_info.key_size,
+                        signature_algorithm=cert_info.signature_algorithm,
+                        hostname_matches=cert_info.hostname_matches,
+                        ocsp_present=cert_info.ocsp_present,
+                        crl_present=cert_info.crl_present,
+                        eku_server_auth=cert_info.eku_server_auth,
+                        key_usage_digital_signature=cert_info.key_usage_digital_signature,
+                        key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
+                        chain_has_expiring=cert_info.chain_has_expiring,
+                        weak_signature=cert_info.weak_signature,
                         is_self_signed=cert_info.is_self_signed,
                         is_trusted_ca=cert_info.is_trusted_ca,
                         validation_error=cert_info.validation_error,
                         chain_length=cert_info.chain_length
                     )
-                    db.add_scan(cert_id, endpoint['id'], 'success')
+                    db.add_scan(
+                        cert_id, endpoint['id'], 'success',
+                        tls_version=cert_info.tls_version,
+                        cipher=cert_info.cipher
+                    )
     
     background_tasks.add_task(do_scan, scan_request.endpoint_id)
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=user.email,
         action="scan_trigger",
         resource_type="endpoint" if scan_request.endpoint_id else None,
@@ -1045,7 +1473,7 @@ async def send_test_notification(
     success = notifier.test_connection()
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=user.email,
         action="notification_test",
         details=f"Test notification {'succeeded' if success else 'failed'}",
@@ -1105,6 +1533,7 @@ async def add_trusted_ca(
     import hashlib
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
 
     try:
         # Parse the PEM certificate
@@ -1116,7 +1545,7 @@ async def add_trusted_ca(
 
         # Extract certificate info
         fingerprint = hashlib.sha256(cert.public_bytes(
-            encoding=x509.base.serialization.Encoding.DER
+            encoding=serialization.Encoding.DER
         )).hexdigest()
 
         subject_parts = []
@@ -1145,7 +1574,7 @@ async def add_trusted_ca(
         scanner.set_custom_cas(db.get_all_trusted_ca_pems())
 
         # Audit log
-        db.add_audit_log(
+        audit_log(
             user_email=user.email,
             action="ca_create",
             resource_type="trusted_ca",
@@ -1183,7 +1612,7 @@ async def delete_trusted_ca(
         scanner.set_custom_cas(db.get_all_trusted_ca_pems())
 
         # Audit log
-        db.add_audit_log(
+        audit_log(
             user_email=user.email,
             action="ca_delete",
             resource_type="trusted_ca",
@@ -1266,7 +1695,8 @@ async def create_sweep(
         ports=sweep.ports,
         owner=sweep.owner,
         criticality=sweep.criticality,
-        webhook_url=sweep.webhook_url
+        webhook_url=sweep.webhook_url,
+        created_by=user.email
     )
 
     # Set initial progress
@@ -1277,7 +1707,7 @@ async def create_sweep(
     background_tasks.add_task(execute_sweep, sweep_id)
 
     # Audit log
-    db.add_audit_log(
+    audit_log(
         user_email=user.email,
         action="sweep_create",
         resource_type="sweep",
@@ -1287,6 +1717,54 @@ async def create_sweep(
     )
 
     return {"id": sweep_id, "message": "Sweep started", "total_scans": total_scans}
+
+
+@app.post("/api/sweeps/{sweep_id}/restart")
+async def restart_sweep(
+    sweep_id: int,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    user: User = Depends(require_editor)
+):
+    """Restart a sweep by clearing previous results and re-running it (editor+)"""
+    sweep = db.get_sweep(sweep_id)
+    if not sweep:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+
+    if sweep.get('created_by') and sweep['created_by'] != user.email and not user.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Only the creator or an admin can restart this sweep")
+
+    if sweep['status'] == 'running':
+        raise HTTPException(status_code=400, detail="Cannot restart a running sweep")
+
+    # Recalculate total scans
+    import json
+    from network_scanner import validate_target
+
+    valid, error, ip_count = validate_target(sweep['target'])
+    if not valid:
+        raise HTTPException(status_code=400, detail=error)
+
+    ports = json.loads(sweep['ports'])
+    total_scans = ip_count * len(ports)
+
+    # Reset sweep and clear results
+    db.reset_sweep(sweep_id, total_scans=total_scans)
+
+    # Start sweep in background
+    background_tasks.add_task(execute_sweep, sweep_id)
+
+    # Audit log
+    audit_log(
+        user_email=user.email,
+        action="sweep_restart",
+        resource_type="sweep",
+        resource_id=sweep_id,
+        details=f"Restarted network sweep '{sweep['name']}'",
+        ip_address=get_client_ip(request)
+    )
+
+    return {"id": sweep_id, "message": "Sweep restarted", "total_scans": total_scans}
 
 
 async def execute_sweep(sweep_id: int):
@@ -1323,7 +1801,8 @@ async def execute_sweep(sweep_id: int):
                 host=result.ip,
                 port=result.port,
                 owner=sweep['owner'],
-                criticality=sweep['criticality']
+                criticality=sweep['criticality'],
+                created_by=sweep.get('created_by')
             )
 
             # Set webhook if configured
@@ -1344,12 +1823,27 @@ async def execute_sweep(sweep_id: int):
                     not_after=cert_info.not_after.isoformat(),
                     serial_number=cert_info.serial_number,
                     san_list=cert_info.san_list,
+                    key_type=cert_info.key_type,
+                    key_size=cert_info.key_size,
+                    signature_algorithm=cert_info.signature_algorithm,
+                    hostname_matches=cert_info.hostname_matches,
+                    ocsp_present=cert_info.ocsp_present,
+                    crl_present=cert_info.crl_present,
+                    eku_server_auth=cert_info.eku_server_auth,
+                    key_usage_digital_signature=cert_info.key_usage_digital_signature,
+                    key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
+                    chain_has_expiring=cert_info.chain_has_expiring,
+                    weak_signature=cert_info.weak_signature,
                     is_self_signed=cert_info.is_self_signed,
                     is_trusted_ca=cert_info.is_trusted_ca,
                     validation_error=cert_info.validation_error,
                     chain_length=cert_info.chain_length
                 )
-                db.add_scan(cert_id, endpoint_id, 'success')
+                db.add_scan(
+                    cert_id, endpoint_id, 'success',
+                    tls_version=cert_info.tls_version,
+                    cipher=cert_info.cipher
+                )
 
         db.update_sweep_status(sweep_id, "completed",
                                completed_at=datetime.utcnow().isoformat())
@@ -1390,13 +1884,16 @@ async def delete_sweep(
     if not sweep:
         raise HTTPException(status_code=404, detail="Sweep not found")
 
+    if sweep.get('created_by') and sweep['created_by'] != user.email and not user.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Only the creator or an admin can delete this sweep")
+
     if sweep['status'] == 'running':
         raise HTTPException(status_code=400, detail="Cannot delete running sweep")
 
     sweep_name = sweep['name']
     if db.delete_sweep(sweep_id):
         # Audit log
-        db.add_audit_log(
+        audit_log(
             user_email=user.email,
             action="sweep_delete",
             resource_type="sweep",

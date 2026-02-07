@@ -101,23 +101,57 @@ export default function Dashboard() {
           color="blue"
         />
         <StatCard
-          title="Expiring Soon"
-          value={stats.expiring_soon}
-          subtitle="Within 30 days"
+          title="Expiring (7 days)"
+          value={stats.expiring_7}
+          subtitle="Next 7 days"
+          icon={<Clock className="w-6 h-6 text-red-500" />}
+          color="red"
+        />
+        <StatCard
+          title="Expiring (30 days)"
+          value={stats.expiring_30}
+          subtitle="Next 30 days"
           icon={<Clock className="w-6 h-6 text-yellow-500" />}
           color="yellow"
         />
         <StatCard
-          title="Self-Signed"
-          value={stats.self_signed}
-          icon={<Shield className="w-6 h-6 text-red-500" />}
+          title="Expiring (90 days)"
+          value={stats.expiring_90}
+          subtitle="Next 90 days"
+          icon={<Clock className="w-6 h-6 text-blue-500" />}
+          color="blue"
+        />
+      </div>
+
+      {/* Security & Health */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatCard
+          title="Weak Keys"
+          value={stats.weak_keys}
+          subtitle="RSA<2048 / EC<256"
+          icon={<AlertTriangle className="w-6 h-6 text-orange-500" />}
+          color="orange"
+        />
+        <StatCard
+          title="Legacy TLS"
+          value={stats.legacy_tls}
+          subtitle="TLS 1.0/1.1 endpoints"
+          icon={<AlertOctagon className="w-6 h-6 text-red-500" />}
           color="red"
         />
         <StatCard
-          title="Untrusted CA"
-          value={stats.untrusted}
-          icon={<AlertOctagon className="w-6 h-6 text-orange-500" />}
-          color="orange"
+          title="Cert Changes (24h)"
+          value={stats.cert_changes_24h}
+          subtitle="Endpoints changed"
+          icon={<RefreshCw className="w-6 h-6 text-blue-500" />}
+          color="blue"
+        />
+        <StatCard
+          title="Last Scan"
+          value={stats.last_scan_status || 'Unknown'}
+          subtitle={stats.last_scan_at ? `At ${new Date(stats.last_scan_at).toLocaleString()}` : 'No scans yet'}
+          icon={<Shield className="w-6 h-6 text-gray-500" />}
+          color="gray"
         />
       </div>
 
@@ -181,6 +215,7 @@ function StatCard({ title, value, subtitle, icon, color }) {
     yellow: 'bg-yellow-50 border-yellow-200',
     red: 'bg-red-50 border-red-200',
     orange: 'bg-orange-50 border-orange-200',
+    gray: 'bg-gray-50 border-gray-200',
   }
 
   return (
@@ -213,6 +248,7 @@ function CertificateCard({ cert }) {
   const daysLeft = Math.floor(cert.days_until_expiry)
   const isUrgent = daysLeft <= 7
   const isWarning = daysLeft <= 30
+  const isSelfSigned = Boolean(cert.is_self_signed)
 
   return (
     <div className={`border-l-4 ${
@@ -237,7 +273,7 @@ function CertificateCard({ cert }) {
           }`}>
             {daysLeft} days
           </p>
-          {cert.is_self_signed && (
+          {isSelfSigned && (
             <span className="text-xs text-red-600 font-medium">
               Self-Signed
             </span>

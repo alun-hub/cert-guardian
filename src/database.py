@@ -4,8 +4,12 @@ Database models for Certificate Guardian
 """
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict
+def _bool_or_none(value):
+    if value is None:
+        return None
+    return 1 if value else 0
 import json
 
 
@@ -33,6 +37,17 @@ class Database:
                 not_after TEXT NOT NULL,
                 serial_number TEXT,
                 san_list TEXT,
+                key_type TEXT,
+                key_size INTEGER,
+                signature_algorithm TEXT,
+                hostname_matches INTEGER,
+                ocsp_present INTEGER,
+                crl_present INTEGER,
+                eku_server_auth INTEGER,
+                key_usage_digital_signature INTEGER,
+                key_usage_key_encipherment INTEGER,
+                chain_has_expiring INTEGER,
+                weak_signature INTEGER,
                 is_self_signed INTEGER DEFAULT 0,
                 is_trusted_ca INTEGER DEFAULT 0,
                 validation_error TEXT,
@@ -51,6 +66,7 @@ class Database:
                 owner TEXT,
                 criticality TEXT DEFAULT 'medium',
                 webhook_url TEXT,
+                created_by TEXT,
                 UNIQUE(host, port)
             )
         """)
@@ -58,6 +74,10 @@ class Database:
         # Try to add webhook_url column if it doesn't exist (migration)
         try:
             cursor.execute("ALTER TABLE endpoints ADD COLUMN webhook_url TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE endpoints ADD COLUMN created_by TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
 
@@ -84,10 +104,41 @@ class Database:
                 scanned_at TEXT NOT NULL,
                 status TEXT NOT NULL,
                 error_message TEXT,
+                tls_version TEXT,
+                cipher TEXT,
                 FOREIGN KEY (certificate_id) REFERENCES certificates(id),
                 FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
             )
         """)
+
+        # Migrations for new certificate fields
+        for col_def in [
+            "key_type TEXT",
+            "key_size INTEGER",
+            "signature_algorithm TEXT",
+            "hostname_matches INTEGER",
+            "ocsp_present INTEGER",
+            "crl_present INTEGER",
+            "eku_server_auth INTEGER",
+            "key_usage_digital_signature INTEGER",
+            "key_usage_key_encipherment INTEGER",
+            "chain_has_expiring INTEGER",
+            "weak_signature INTEGER",
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE certificates ADD COLUMN {col_def}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Migrations for scan metadata
+        for col_def in [
+            "tls_version TEXT",
+            "cipher TEXT",
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE certificate_scans ADD COLUMN {col_def}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         
         # Notifications table (track what we've already sent)
         cursor.execute("""
@@ -113,6 +164,7 @@ class Database:
                 owner TEXT,
                 criticality TEXT DEFAULT 'medium',
                 webhook_url TEXT,
+                created_by TEXT,
                 status TEXT DEFAULT 'pending',
                 progress_total INTEGER DEFAULT 0,
                 progress_scanned INTEGER DEFAULT 0,
@@ -123,6 +175,10 @@ class Database:
                 error_message TEXT
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE sweeps ADD COLUMN created_by TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         # Sweep results table (individual scan results)
         cursor.execute("""
@@ -181,25 +237,32 @@ class Database:
 
         self.conn.commit()
     
-    def add_endpoint(self, host: str, port: int, owner: str = None, 
-                     criticality: str = "medium") -> int:
+    def add_endpoint(self, host: str, port: int, owner: str = None,
+                     criticality: str = "medium", created_by: str = None) -> int:
         """Add or update an endpoint"""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO endpoints (host, port, owner, criticality)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO endpoints (host, port, owner, criticality, created_by)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(host, port) DO UPDATE SET
                 owner = excluded.owner,
                 criticality = excluded.criticality
-        """, (host, port, owner, criticality))
+        """, (host, port, owner, criticality, created_by))
         self.conn.commit()
         return cursor.lastrowid
     
     def add_certificate(self, fingerprint: str, subject: str, issuer: str,
                        not_before: str, not_after: str, serial_number: str = None,
-                       san_list: List[str] = None, is_self_signed: bool = False,
-                       is_trusted_ca: bool = False, validation_error: str = None,
-                       chain_length: int = 0) -> int:
+                       san_list: List[str] = None, key_type: str = None,
+                       key_size: int = None, signature_algorithm: str = None,
+                       hostname_matches: bool = None, ocsp_present: bool = None,
+                       crl_present: bool = None, eku_server_auth: bool = None,
+                       key_usage_digital_signature: bool = None,
+                       key_usage_key_encipherment: bool = None,
+                       chain_has_expiring: bool = None,
+                       weak_signature: bool = None,
+                       is_self_signed: bool = False, is_trusted_ca: bool = False,
+                       validation_error: str = None, chain_length: int = 0) -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
@@ -208,19 +271,45 @@ class Database:
         cursor.execute("""
             INSERT INTO certificates (
                 fingerprint, subject, issuer, not_before, not_after,
-                serial_number, san_list, is_self_signed, is_trusted_ca,
-                validation_error, chain_length, created_at, updated_at
+                serial_number, san_list, key_type, key_size, signature_algorithm,
+                hostname_matches, ocsp_present, crl_present, eku_server_auth,
+                key_usage_digital_signature, key_usage_key_encipherment,
+                chain_has_expiring, weak_signature,
+                is_self_signed, is_trusted_ca, validation_error, chain_length,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
+                subject = excluded.subject,
+                issuer = excluded.issuer,
+                not_before = excluded.not_before,
+                not_after = excluded.not_after,
+                serial_number = excluded.serial_number,
+                san_list = excluded.san_list,
+                key_type = excluded.key_type,
+                key_size = excluded.key_size,
+                signature_algorithm = excluded.signature_algorithm,
+                hostname_matches = excluded.hostname_matches,
+                ocsp_present = excluded.ocsp_present,
+                crl_present = excluded.crl_present,
+                eku_server_auth = excluded.eku_server_auth,
+                key_usage_digital_signature = excluded.key_usage_digital_signature,
+                key_usage_key_encipherment = excluded.key_usage_key_encipherment,
+                chain_has_expiring = excluded.chain_has_expiring,
+                weak_signature = excluded.weak_signature,
                 is_self_signed = excluded.is_self_signed,
                 is_trusted_ca = excluded.is_trusted_ca,
                 validation_error = excluded.validation_error,
                 chain_length = excluded.chain_length,
                 updated_at = excluded.updated_at
         """, (fingerprint, subject, issuer, not_before, not_after,
-              serial_number, san_json, int(is_self_signed), int(is_trusted_ca),
-              validation_error, chain_length, now, now))
+              serial_number, san_json, key_type, key_size, signature_algorithm,
+              _bool_or_none(hostname_matches), _bool_or_none(ocsp_present),
+              _bool_or_none(crl_present), _bool_or_none(eku_server_auth),
+              _bool_or_none(key_usage_digital_signature), _bool_or_none(key_usage_key_encipherment),
+              _bool_or_none(chain_has_expiring), _bool_or_none(weak_signature),
+              int(is_self_signed), int(is_trusted_ca), validation_error,
+              chain_length, now, now))
         self.conn.commit()
 
         # Get the actual certificate ID (lastrowid is unreliable with ON CONFLICT)
@@ -228,17 +317,19 @@ class Database:
         return cursor.fetchone()[0]
     
     def add_scan(self, certificate_id: int, endpoint_id: int, 
-                 status: str, error_message: str = None) -> int:
+                 status: str, error_message: str = None,
+                 tls_version: str = None, cipher: str = None) -> int:
         """Record a certificate scan"""
         cursor = self.conn.cursor()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         
         cursor.execute("""
             INSERT INTO certificate_scans (
-                certificate_id, endpoint_id, scanned_at, status, error_message
+                certificate_id, endpoint_id, scanned_at, status, error_message,
+                tls_version, cipher
             )
-            VALUES (?, ?, ?, ?, ?)
-        """, (certificate_id, endpoint_id, now, status, error_message))
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (certificate_id, endpoint_id, now, status, error_message, tls_version, cipher))
         self.conn.commit()
         return cursor.lastrowid
     
@@ -411,16 +502,16 @@ class Database:
 
     def create_sweep(self, name: str, target: str, ports: List[int],
                      owner: str = None, criticality: str = "medium",
-                     webhook_url: str = None) -> int:
+                     webhook_url: str = None, created_by: str = None) -> int:
         """Create a new network sweep configuration"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
         ports_json = json.dumps(ports)
 
         cursor.execute("""
-            INSERT INTO sweeps (name, target, ports, owner, criticality, webhook_url, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (name, target, ports_json, owner, criticality, webhook_url, now))
+            INSERT INTO sweeps (name, target, ports, owner, criticality, webhook_url, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, target, ports_json, owner, criticality, webhook_url, created_by, now))
         self.conn.commit()
         return cursor.lastrowid
 
@@ -496,6 +587,28 @@ class Database:
             ORDER BY scanned_at DESC
         """, (sweep_id,))
         return [dict(row) for row in cursor.fetchall()]
+
+    def reset_sweep(self, sweep_id: int, total_scans: int = None) -> bool:
+        """Reset sweep status and clear previous results"""
+        cursor = self.conn.cursor()
+        # Clear previous results
+        cursor.execute("DELETE FROM sweep_results WHERE sweep_id = ?", (sweep_id,))
+        # Reset sweep status
+        updates = [
+            "status = 'pending'",
+            "progress_total = COALESCE(?, progress_total)",
+            "progress_scanned = 0",
+            "progress_found = 0",
+            "started_at = NULL",
+            "completed_at = NULL",
+            "error_message = NULL",
+        ]
+        cursor.execute(
+            f"UPDATE sweeps SET {', '.join(updates)} WHERE id = ?",
+            (total_scans, sweep_id)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def delete_sweep(self, sweep_id: int) -> bool:
         """Delete sweep and all its results"""

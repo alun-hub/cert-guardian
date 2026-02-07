@@ -5,26 +5,32 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 ## Features
 
 ### Dashboard
-- **Real-time Statistics** - Total certificates, expiring soon, self-signed, untrusted
+- **Real-time Statistics** - Total certificates, expiring 7/30/90 dagar, self-signed, untrusted
 - **Expiry Timeline Chart** - Visualize when certificates expire over time
 - **Urgent Alerts** - Quick view of certificates expiring soon
 - **One-Click Scanning** - Trigger manual scans from the UI (editor+)
+- **TLS hygiene** - Indikatorer för weak keys, legacy TLS, senaste certförändring
 
 ### Certificates View
 - **Comprehensive List** - All monitored certificates with status
 - **Advanced Filtering** - Search, filter by expiry, trust status
+- **Statusfilter** - Expired/Urgent/Warning/Valid
 - **Sortable Columns** - Sort by certificate, endpoints, expiry, trust status
 - **Color-Coded Status** - Easy visual identification of issues
 - **Trust Validation** - See which certs are self-signed or untrusted
+- **Detaljvy på klick** - SAN, key size, signature, TLS/cipher, scan history
+- **Badges** - Snabba varningsflaggor (hostname mismatch, weak signature, OCSP/CRL saknas, m.m.)
 
 ### Endpoints Management
 - **Add/Remove Endpoints** - Full CRUD operations (editor+)
 - **Per-Endpoint Scanning** - Scan individual endpoints on demand
 - **Criticality Levels** - Mark endpoints as low/medium/high/critical
 - **Owner Assignment** - Track responsibility for each endpoint
+- **Recent Scan Trend** - Mini-graf med senaste scanningsstatus
 - **Per-Endpoint Webhooks** - Configure specific Mattermost webhook per endpoint
 - **Search & Filter** - Search by host/owner, filter by criticality, expiry, webhook status
 - **Sortable Columns** - Sort by any column
+- **Ägarskap** - Endpoints kan endast ändras/raderas av skaparen eller admin
 
 ### Network Sweeps
 - **IP Range Scanning** - Discover TLS endpoints in your network (editor+)
@@ -34,17 +40,28 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Auto-Create Endpoints** - Discovered services added automatically
 - **Progress Tracking** - Real-time progress during sweep
 - **Batch Configuration** - Set owner, criticality, webhook for all discovered endpoints
+- **Rescan** - Starta om befintliga sweeps
+- **Ägarskap** - Sweeps kan endast ändras/raderas av skaparen eller admin
 
 ### Settings
 - **Custom CA Management** - Add trusted root CAs for internal PKI (editor+)
 - **CA Upload** - Upload PEM files or paste certificate data
 - **Trust Verification** - Certificates signed by custom CAs show as trusted
+- **Scanner Interval** - Ändra scan-intervall i UI (admin)
+- **Database Health** - Storlek, tabellräkningar och scan-volym (admin)
+- **SIEM Forwarding** - Syslog/Beats med TLS + test-event (admin)
+
+### About
+- **Feature Overview** - Beskrivning av vad appen gör och vilka signaler som spåras
 
 ### User Management (Admin)
 - **User List** - View all users with roles
 - **Create Users** - Add new users with role assignment
 - **Edit Users** - Change roles, deactivate accounts
-- **Audit Logs** - View all user actions and changes
+
+### Audit Logs (Admin)
+- **Dedicated Page** - Filter på användare/action
+- **Audit trail** - Inloggning, ändringar och administrativa handlingar
 
 ## Role-Based Access Control
 
@@ -59,6 +76,9 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 | Manage trusted CAs | No | Yes | Yes |
 | Manage users | No | No | Yes |
 | View audit logs | No | No | Yes |
+| Configure SIEM | No | No | Yes |
+
+**Notering:** Endpoints och sweeps kan endast ändras/raderas av skaparen eller admin.
 
 ## Architecture
 
@@ -190,8 +210,15 @@ Full API reference available at:
 | POST | /api/endpoints | Editor+ | Create endpoint |
 | POST | /api/scan | Editor+ | Trigger scan |
 | POST | /api/sweeps | Editor+ | Start network sweep |
+| POST | /api/sweeps/{id}/restart | Editor+ | Restart sweep |
 | GET | /api/users | Admin | List users |
 | GET | /api/audit-logs | Admin | View audit logs |
+| GET | /api/settings/scanner | Any | Read scanner settings |
+| PUT | /api/settings/scanner | Admin | Update scan interval |
+| GET | /api/settings/db-health | Admin | DB health stats |
+| GET | /api/settings/siem | Admin | Read SIEM settings |
+| PUT | /api/settings/siem | Admin | Update SIEM settings |
+| POST | /api/settings/siem/test | Admin | Send SIEM test event |
 
 ## Configuration
 
@@ -211,6 +238,16 @@ mattermost:
 scanner:
   interval_seconds: 3600
   timeout_seconds: 10
+
+siem:
+  mode: "disabled"  # disabled | syslog | beats
+  host: "siem.example.com"
+  port: 6514
+  tls_enabled: true
+  tls_verify: true
+  ca_pem: ""
+  client_cert_pem: ""
+  client_key_pem: ""
 
 auth:
   mode: "local"

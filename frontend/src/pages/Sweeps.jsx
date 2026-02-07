@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   Network, Plus, Trash2, CheckCircle, XCircle,
-  Clock, Loader2, Search, X
+  Clock, Loader2, Search, X, RefreshCw
 } from 'lucide-react'
 import { sweepService } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Sweeps() {
-  const { isEditor } = useAuth()
+  const { isEditor, isAdmin, user } = useAuth()
   const [sweeps, setSweeps] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -51,6 +51,17 @@ export default function Sweeps() {
     }
   }
 
+  const handleRestart = async (sweepId) => {
+    if (!confirm('Restart this sweep and clear previous results?')) return
+    try {
+      await sweepService.restart(sweepId)
+      loadSweeps()
+    } catch (error) {
+      console.error('Restart failed:', error)
+      alert(error.response?.data?.detail || 'Failed to restart sweep')
+    }
+  }
+
   const getStatusIcon = (status) => {
     switch (status) {
       case 'completed': return <CheckCircle className="w-5 h-5 text-green-500" />
@@ -67,6 +78,13 @@ export default function Sweeps() {
     } catch {
       return portsJson
     }
+  }
+
+  const canManageSweep = (sweep) => {
+    if (!isEditor) return false
+    if (isAdmin) return true
+    if (!sweep?.created_by) return true
+    return sweep.created_by === user?.email
   }
 
   return (
@@ -175,7 +193,17 @@ export default function Sweeps() {
                       >
                         <Search className="w-4 h-4" />
                       </button>
-                      {isEditor && (
+                      {canManageSweep(sweep) && (
+                        <button
+                          onClick={() => handleRestart(sweep.id)}
+                          disabled={sweep.status === 'running'}
+                          className="p-2 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Rescan sweep"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canManageSweep(sweep) && (
                         <button
                           onClick={() => handleDelete(sweep.id)}
                           disabled={sweep.status === 'running'}
@@ -227,20 +255,29 @@ function CreateSweepModal({ onClose, onSuccess }) {
   const [validating, setValidating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const validateTimeoutRef = useRef(null)
+  const latestTargetRef = useRef('')
 
   const validateTarget = async (target) => {
     if (!target) {
       setValidation(null)
       return
     }
+    latestTargetRef.current = target
     try {
       setValidating(true)
       const response = await sweepService.validate(target)
-      setValidation(response.data)
+      if (latestTargetRef.current === target) {
+        setValidation(response.data)
+      }
     } catch (error) {
-      setValidation({ valid: false, error: 'Validation failed' })
+      if (latestTargetRef.current === target) {
+        const message = error.response?.data?.error || error.response?.data?.detail || 'Validation failed'
+        setValidation({ valid: false, error: message })
+      }
     } finally {
-      setValidating(false)
+      if (latestTargetRef.current === target) {
+        setValidating(false)
+      }
     }
   }
 

@@ -367,6 +367,7 @@ Lista alla endpoints.
 Skapa ny endpoint.
 
 **Headers:** `Authorization: Bearer <token>` (editor+ krävs)
+**Notering:** Endpoints kan endast ändras/raderas av skaparen eller admin.
 
 **Request Body:**
 ```json
@@ -393,6 +394,7 @@ Skapa ny endpoint.
 Uppdatera endpoint.
 
 **Headers:** `Authorization: Bearer <token>` (editor+ krävs)
+**Notering:** Endpoints kan endast ändras/raderas av skaparen eller admin.
 
 **Request Body:**
 ```json
@@ -410,6 +412,7 @@ Uppdatera endpoint.
 Ta bort endpoint.
 
 **Headers:** `Authorization: Bearer <token>` (editor+ krävs)
+**Notering:** Endpoints kan endast ändras/raderas av skaparen eller admin.
 
 ---
 
@@ -482,6 +485,7 @@ Validera sweep-target och få antal IP-adresser.
 Skapa och starta network sweep.
 
 **Headers:** `Authorization: Bearer <token>` (editor+ krävs)
+**Notering:** Sweeps kan endast ändras/raderas av skaparen eller admin.
 
 **Request Body:**
 ```json
@@ -559,6 +563,15 @@ Hämta sweep med resultat.
 ### DELETE /api/sweeps/{sweep_id}
 
 Ta bort sweep.
+
+**Headers:** `Authorization: Bearer <token>` (editor+ krävs)
+**Notering:** Sweeps kan endast ändras/raderas av skaparen eller admin.
+
+---
+
+### POST /api/sweeps/{sweep_id}/restart
+
+Starta om befintlig sweep.
 
 **Headers:** `Authorization: Bearer <token>` (editor+ krävs)
 
@@ -663,6 +676,84 @@ Testa webhook URL.
 Testa global Mattermost-webhook.
 
 **Headers:** `Authorization: Bearer <token>` (editor+ krävs)
+
+---
+
+## Settings (Admin)
+
+### GET /api/settings/scanner
+
+Hämta scanner-inställningar.
+
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
+---
+
+### PUT /api/settings/scanner
+
+Uppdatera scan-intervall (sekunder).
+
+**Headers:** `Authorization: Bearer <token>` (admin krävs)
+
+**Request Body:**
+```json
+{
+  "interval_seconds": 3600
+}
+```
+
+---
+
+### GET /api/settings/db-health
+
+Hämta DB-hälsa (storlek, rader, scans 30 dagar).
+
+**Headers:** `Authorization: Bearer <token>` (admin krävs)
+
+---
+
+### GET /api/settings/siem
+
+Hämta SIEM-konfiguration.
+
+**Headers:** `Authorization: Bearer <token>` (admin krävs)
+
+---
+
+### PUT /api/settings/siem
+
+Uppdatera SIEM-konfiguration (syslog/beats med TLS).
+
+**Headers:** `Authorization: Bearer <token>` (admin krävs)
+
+**Request Body:**
+```json
+{
+  "mode": "syslog",
+  "host": "siem.example.com",
+  "port": 6514,
+  "tls_enabled": true,
+  "tls_verify": true,
+  "ca_pem": "",
+  "client_cert_pem": "",
+  "client_key_pem": ""
+}
+```
+
+---
+
+### POST /api/settings/siem/test
+
+Skicka test-event till SIEM.
+
+**Headers:** `Authorization: Bearer <token>` (admin krävs)
+
+**Request Body:**
+```json
+{
+  "message": "Test event"
+}
+```
 
 ---
 

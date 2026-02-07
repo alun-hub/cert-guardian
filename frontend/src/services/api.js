@@ -125,6 +125,7 @@ export const sweepService = {
   getById: (id) => api.get(`/sweeps/${id}`),
   create: (data) => api.post('/sweeps', data),
   delete: (id) => api.delete(`/sweeps/${id}`),
+  restart: (id) => api.post(`/sweeps/${id}/restart`),
   validate: (target) => api.post('/sweeps/validate', { target }),
 }
 

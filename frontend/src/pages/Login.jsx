@@ -24,12 +24,16 @@ export default function Login() {
       return
     }
 
-    setSubmitting(true)
-    const result = await login(username, password)
-    setSubmitting(false)
-
-    if (!result.success) {
-      setLocalError(result.error)
+    try {
+      setSubmitting(true)
+      const result = await login(username, password)
+      if (!result?.success) {
+        setLocalError(result?.error || 'Login failed')
+      }
+    } catch (err) {
+      setLocalError('Login failed')
+    } finally {
+      setSubmitting(false)
     }
   }
 
