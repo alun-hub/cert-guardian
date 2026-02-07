@@ -36,7 +36,7 @@ scanner:
 
 # SIEM forwarding (optional)
 siem:
-  mode: "disabled"  # disabled | syslog | beats
+  mode: "disabled"  # disabled | stdout | syslog | beats
   host: "siem.example.com"
   port: 6514
   tls_enabled: true

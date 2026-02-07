@@ -125,7 +125,7 @@ class DbHealth(BaseModel):
 
 
 class SiemSettings(BaseModel):
-    mode: str  # "disabled" | "syslog" | "beats"
+    mode: str  # "disabled" | "stdout" | "syslog" | "beats"
     host: Optional[str] = None
     port: Optional[int] = None
     tls_enabled: bool = True
@@ -981,10 +981,10 @@ async def update_siem_settings(
         raise HTTPException(status_code=500, detail="Configuration not loaded")
 
     mode = settings.mode.lower()
-    if mode not in {"disabled", "syslog", "beats"}:
-        raise HTTPException(status_code=400, detail="mode must be disabled, syslog, or beats")
+    if mode not in {"disabled", "stdout", "syslog", "beats"}:
+        raise HTTPException(status_code=400, detail="mode must be disabled, stdout, syslog, or beats")
 
-    if mode != "disabled":
+    if mode in {"syslog", "beats"}:
         if not settings.host or not settings.port:
             raise HTTPException(status_code=400, detail="host and port are required for syslog or beats")
         if settings.port <= 0 or settings.port > 65535:

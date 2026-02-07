@@ -27,6 +27,8 @@ class SiemClient:
         if mode == "disabled":
             return False
 
+        if mode == "stdout":
+            return self._send_stdout(event)
         if mode == "syslog":
             return self._send_syslog(event)
         if mode == "beats":
@@ -60,6 +62,16 @@ class SiemClient:
         with os.fdopen(fd, "w") as f:
             f.write(pem_data)
         return path
+
+    def _send_stdout(self, event: dict) -> bool:
+        """Print audit events as JSON to stdout for Kubernetes log collection."""
+        import sys
+        fields = self._event_to_fields(event)
+        try:
+            print(json.dumps(fields, ensure_ascii=False), file=sys.stdout, flush=True)
+            return True
+        except Exception:
+            return False
 
     def _send_syslog(self, event: dict) -> bool:
         host = self.config.get("host")
@@ -99,7 +111,7 @@ class SiemClient:
         if not host or not port:
             return False
 
-        # Lumberjack v1 (Beats) minimal implementation
+        # Lumberjack v2 (Beats) - JSON frame implementation
         fields = self._event_to_fields(event)
         seq = 1
         window = 1
@@ -112,14 +124,15 @@ class SiemClient:
                     conn = sock
 
                 conn.settimeout(5)
-                conn.sendall(b'1' + struct.pack('>I', window))  # window size
-                payload = self._encode_data_frame(seq, fields)
-                conn.sendall(payload)
+                # Window frame: version '2' + type 'W' + size
+                conn.sendall(b'2W' + struct.pack('>I', window))
+                # JSON data frame: version '2' + type 'J' + seq + payload_len + payload
+                payload = json.dumps(fields, ensure_ascii=False).encode('utf-8')
+                frame = b'2J' + struct.pack('>I', seq) + struct.pack('>I', len(payload)) + payload
+                conn.sendall(frame)
 
-                # Read ack
-                ack_type = conn.recv(1)
-                if ack_type == b'A':
-                    _ = conn.recv(4)  # ack sequence
+                # Read ack: version + type 'A' + seq
+                ack = conn.recv(6)
                 conn.close()
             return True
         except Exception:
@@ -135,17 +148,3 @@ class SiemClient:
                 continue
             fields[k] = str(v)
         return fields
-
-    def _encode_data_frame(self, seq: int, fields: dict) -> bytes:
-        frame = bytearray()
-        frame.extend(b'D')
-        frame.extend(struct.pack('>I', seq))
-        frame.extend(struct.pack('>I', len(fields)))
-        for key, value in fields.items():
-            key_b = key.encode('utf-8')
-            val_b = str(value).encode('utf-8')
-            frame.extend(struct.pack('>I', len(key_b)))
-            frame.extend(key_b)
-            frame.extend(struct.pack('>I', len(val_b)))
-            frame.extend(val_b)
-        return bytes(frame)

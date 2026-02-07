@@ -49,7 +49,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Trust Verification** - Certificates signed by custom CAs show as trusted
 - **Scanner Interval** - Ändra scan-intervall i UI (admin)
 - **Database Health** - Storlek, tabellräkningar och scan-volym (admin)
-- **SIEM Forwarding** - Syslog/Beats med TLS + test-event (admin)
+- **SIEM Forwarding** - Stdout/Syslog/Beats med TLS + test-event (admin)
 
 ### About
 - **Feature Overview** - Beskrivning av vad appen gör och vilka signaler som spåras
@@ -240,7 +240,7 @@ scanner:
   timeout_seconds: 10
 
 siem:
-  mode: "disabled"  # disabled | syslog | beats
+  mode: "disabled"  # disabled | stdout | syslog | beats
   host: "siem.example.com"
   port: 6514
   tls_enabled: true

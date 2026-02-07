@@ -38,7 +38,7 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
 - **Custom CA Management** - Lägg till egna root-certifikat för intern PKI
 - **Scanner settings i UI** - ändra scan-intervall direkt i Settings (admin)
 - **Database Health panel** - storlek, antal rader och scan-volym
-- **SIEM-forwarding** - Syslog eller Beats med TLS (testknapp i UI)
+- **SIEM-forwarding** - Stdout, Syslog eller Beats med TLS (testknapp i UI)
 - **Rescan i sweeps** - starta om befintliga nätverkssvep
 - **Ägarskap för endpoints/sweeps** - bara skaparen/admin kan ändra/ta bort
 
@@ -129,7 +129,7 @@ scanner:
   max_concurrent: 10
 
 siem:
-  mode: "disabled"  # disabled | syslog | beats
+  mode: "disabled"  # disabled | stdout | syslog | beats
   host: "siem.example.com"
   port: 6514
   tls_enabled: true

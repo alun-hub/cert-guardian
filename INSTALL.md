@@ -287,7 +287,7 @@ Konfigurera i `config/config.yaml` eller via Settings (admin):
 
 ```yaml
 siem:
-  mode: "syslog"   # disabled | syslog | beats
+  mode: "syslog"   # disabled | stdout | syslog | beats
   host: "siem.example.com"
   port: 6514
   tls_enabled: true

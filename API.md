@@ -722,11 +722,19 @@ Hämta SIEM-konfiguration.
 
 ### PUT /api/settings/siem
 
-Uppdatera SIEM-konfiguration (syslog/beats med TLS).
+Uppdatera SIEM-konfiguration.
 
 **Headers:** `Authorization: Bearer <token>` (admin krävs)
 
-**Request Body:**
+**Modes:**
+| Mode | Beskrivning |
+|------|-------------|
+| `disabled` | Ingen SIEM-forwarding |
+| `stdout` | JSON till stdout (för Kubernetes log collection) |
+| `syslog` | RFC 5424 syslog via TCP/TLS |
+| `beats` | Lumberjack v2 (Elastic Beats) via TCP/TLS |
+
+**Request Body (syslog/beats):**
 ```json
 {
   "mode": "syslog",
@@ -737,6 +745,13 @@ Uppdatera SIEM-konfiguration (syslog/beats med TLS).
   "ca_pem": "",
   "client_cert_pem": "",
   "client_key_pem": ""
+}
+```
+
+**Request Body (stdout):**
+```json
+{
+  "mode": "stdout"
 }
 ```
 
