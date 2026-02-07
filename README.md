@@ -145,6 +145,24 @@ auth:
     refresh_token_expire_days: 30
 ```
 
+## Schemalagda rapporter
+
+Utöver realtidsvarningar kan Certificate Guardian skicka sammanfattningar till Mattermost via `docker-compose.yaml`:
+
+```bash
+# Daglig sammanfattning — certifikat som löper ut inom 90 dagar
+podman-compose -f docker-compose.yaml --profile summary run --rm cert-guardian-summary
+
+# Säkerhetsrapport — self-signed och untrusted certifikat
+podman-compose -f docker-compose.yaml run --rm cert-guardian python /app/src/main.py --config /app/config/config.yaml --security
+```
+
+Kör via cron eller systemd timer för dagliga rapporter, t.ex.:
+```bash
+# Varje morgon kl 08:00
+0 8 * * * podman-compose -f /path/to/docker-compose.yaml --profile summary run --rm cert-guardian-summary
+```
+
 ## Notifieringsnivåer
 
 | Dagar kvar | Nivå | Färg |

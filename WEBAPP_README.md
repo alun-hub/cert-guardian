@@ -279,6 +279,24 @@ docker-compose -f docker-compose-webapp.yaml logs -f
 docker-compose -f docker-compose-webapp.yaml down
 ```
 
+### Scheduled Reports
+
+Certificate Guardian can send summary reports to Mattermost using the separate `docker-compose.yaml`:
+
+```bash
+# Daily summary — certificates expiring within 90 days
+podman-compose -f docker-compose.yaml --profile summary run --rm cert-guardian-summary
+
+# Security report — self-signed and untrusted certificates
+podman-compose -f docker-compose.yaml run --rm cert-guardian python /app/src/main.py --config /app/config/config.yaml --security
+```
+
+Schedule with cron for daily reports:
+```bash
+# Every morning at 08:00
+0 8 * * * podman-compose -f /path/to/docker-compose.yaml --profile summary run --rm cert-guardian-summary
+```
+
 ### Reverse Proxy (Nginx)
 
 ```nginx
