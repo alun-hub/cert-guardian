@@ -10,6 +10,7 @@ cert-guardian/
 │   └── src/pages/        # Dashboard, Certificates, Endpoints, Security, Users
 ├── config/               # Konfigurationsfiler
 ├── kubernetes/           # K8s/OpenShift manifests
+├── helm/cert-guardian/   # Helm chart
 ├── data/                 # SQLite databas (gitignored)
 └── tests/                # Tester
 ```
@@ -104,6 +105,29 @@ oc logs -f deployment/cert-guardian
 oc expose service cert-guardian-frontend
 oc get route
 ```
+
+### Helm Chart (rekommenderat för Kubernetes)
+
+```bash
+# Grundinstallation
+helm install cert-guardian helm/cert-guardian/ \
+  --set config.mattermost.webhookUrl="https://mattermost.example.com/hooks/xxx" \
+  -n cert-guardian --create-namespace
+
+# Med Ingress, TLS och Prometheus
+helm install cert-guardian helm/cert-guardian/ \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=certguardian.example.com \
+  --set ingress.tls[0].secretName=cert-guardian-tls \
+  --set ingress.tls[0].hosts[0]=certguardian.example.com \
+  --set metrics.serviceMonitor.enabled=true \
+  -n cert-guardian --create-namespace
+
+# Avinstallera
+helm uninstall cert-guardian -n cert-guardian
+```
+
+Se `helm/cert-guardian/values.yaml` för alla inställningar.
 
 ---
 

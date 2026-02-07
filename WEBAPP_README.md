@@ -219,6 +219,7 @@ Full API reference available at:
 | GET | /api/settings/siem | Admin | Read SIEM settings |
 | PUT | /api/settings/siem | Admin | Update SIEM settings |
 | POST | /api/settings/siem/test | Admin | Send SIEM test event |
+| GET | /metrics | None | Prometheus metrics |
 
 ## Configuration
 
@@ -296,6 +297,44 @@ Schedule with cron for daily reports:
 # Every morning at 08:00
 0 8 * * * podman-compose -f /path/to/docker-compose.yaml --profile summary run --rm cert-guardian-summary
 ```
+
+### Kubernetes with Helm
+
+```bash
+helm install cert-guardian helm/cert-guardian/ \
+  --set config.mattermost.webhookUrl="https://mattermost.example.com/hooks/xxx" \
+  -n cert-guardian --create-namespace
+
+# With Ingress and Prometheus ServiceMonitor
+helm install cert-guardian helm/cert-guardian/ \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=certguardian.example.com \
+  --set metrics.serviceMonitor.enabled=true \
+  -n cert-guardian --create-namespace
+```
+
+See `helm/cert-guardian/values.yaml` for all configuration options.
+
+### Prometheus Metrics
+
+The backend exposes a `/metrics` endpoint (no auth required) compatible with Prometheus:
+
+```bash
+curl http://localhost:8000/metrics | grep cert_guardian
+```
+
+Key metrics:
+| Metric | Type | Description |
+|--------|------|-------------|
+| `cert_guardian_certificates_total` | Gauge | Total unique certificates |
+| `cert_guardian_certificates_expiring{window}` | Gauge | Expiring in 7d/30d/90d |
+| `cert_guardian_certificates_expired` | Gauge | Already expired |
+| `cert_guardian_certificates_self_signed` | Gauge | Self-signed certs |
+| `cert_guardian_certificates_untrusted` | Gauge | Untrusted certs |
+| `cert_guardian_certificates_weak_keys` | Gauge | Weak cryptographic keys |
+| `cert_guardian_http_requests_total` | Counter | HTTP requests by method/endpoint/status |
+| `cert_guardian_http_request_duration_seconds` | Histogram | Request latency |
+| `cert_guardian_database_size_bytes` | Gauge | SQLite database size |
 
 ### Reverse Proxy (Nginx)
 

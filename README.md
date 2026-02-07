@@ -41,6 +41,8 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
 - **SIEM-forwarding** - Stdout, Syslog eller Beats med TLS (testknapp i UI)
 - **Rescan i sweeps** - starta om befintliga nätverkssvep
 - **Ägarskap för endpoints/sweeps** - bara skaparen/admin kan ändra/ta bort
+- **Prometheus metrics** - `/metrics` endpoint för Grafana dashboards och alerting
+- **Helm chart** - Kubernetes-deployment med konfigurerbara values, Ingress och ServiceMonitor
 
 ## Snabbstart
 
@@ -91,6 +93,28 @@ podman restart cert-guardian-frontend
 ```
 
 Utan certifikat fungerar allt som vanligt via HTTP.
+
+### 5. Kubernetes med Helm
+
+```bash
+helm install cert-guardian helm/cert-guardian/ \
+  --set config.mattermost.webhookUrl="https://mattermost.example.com/hooks/xxx" \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=certguardian.example.com \
+  -n cert-guardian --create-namespace
+```
+
+### Prometheus Metrics
+
+Tillgängligt på `http://localhost:8000/metrics` (ingen auth):
+
+```bash
+curl http://localhost:8000/metrics | grep cert_guardian
+# cert_guardian_certificates_total 25.0
+# cert_guardian_certificates_expiring{window="7d"} 2.0
+# cert_guardian_certificates_expired 0.0
+# cert_guardian_http_requests_total{...} 150.0
+```
 
 ## Dokumentation
 

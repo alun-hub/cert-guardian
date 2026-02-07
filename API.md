@@ -856,6 +856,45 @@ Health check endpoint.
 
 ---
 
+## Prometheus Metrics
+
+### GET /metrics
+
+Prometheus-kompatibel metrics endpoint. Ingen autentisering krävs.
+
+**Response:** `text/plain` (Prometheus text format)
+
+**Tillgängliga metrics:**
+
+| Metric | Typ | Beskrivning |
+|--------|-----|-------------|
+| `cert_guardian_certificates_total` | Gauge | Antal unika certifikat |
+| `cert_guardian_endpoints_total` | Gauge | Antal endpoints |
+| `cert_guardian_certificates_expiring{window}` | Gauge | Certifikat som löper ut (7d/30d/90d) |
+| `cert_guardian_certificates_expired` | Gauge | Utgångna certifikat |
+| `cert_guardian_certificates_self_signed` | Gauge | Self-signed certifikat |
+| `cert_guardian_certificates_untrusted` | Gauge | Ej betrodda certifikat |
+| `cert_guardian_certificates_weak_keys` | Gauge | Svaga kryptonycklar |
+| `cert_guardian_endpoints_legacy_tls` | Gauge | Endpoints med TLS 1.0/1.1 |
+| `cert_guardian_scans_total` | Gauge | Totalt antal scanningar |
+| `cert_guardian_database_size_bytes` | Gauge | SQLite-filstorlek |
+| `cert_guardian_http_requests_total{method,endpoint,status}` | Counter | HTTP-anrop |
+| `cert_guardian_http_request_duration_seconds{method,endpoint}` | Histogram | Request-latens |
+| `cert_guardian_info{version,auth_mode}` | Info | Applikationsinfo |
+
+**Exempel:**
+```bash
+curl http://localhost:8000/metrics | grep cert_guardian_certificates
+# cert_guardian_certificates_total 25.0
+# cert_guardian_certificates_expiring{window="7d"} 2.0
+# cert_guardian_certificates_expiring{window="30d"} 5.0
+# cert_guardian_certificates_expiring{window="90d"} 12.0
+```
+
+Certifikat-metrics cachas i 60 sekunder för att undvika onödig databasbelastning vid frekvent scraping.
+
+---
+
 ## Felkoder
 
 | Kod | Beskrivning |
