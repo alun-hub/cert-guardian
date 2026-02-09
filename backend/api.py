@@ -1432,7 +1432,10 @@ async def trigger_scan(
                         tls_version=cert_info.tls_version,
                         cipher=cert_info.cipher
                     )
-    
+
+        # Clean up orphaned certificates after scan
+        db.cleanup_orphaned_certificates()
+
     background_tasks.add_task(do_scan, scan_request.endpoint_id)
 
     # Audit log

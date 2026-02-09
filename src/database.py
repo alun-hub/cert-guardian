@@ -752,6 +752,47 @@ class Database:
         self.conn.commit()
         return cursor.rowcount
 
+    def cleanup_orphaned_certificates(self) -> int:
+        """Remove certificates not referenced by the latest scan of any endpoint.
+
+        When a server rotates its certificate, the old cert remains in the DB
+        but is no longer the latest scan result for any endpoint. This method
+        removes those orphaned certificates and their scan history.
+        """
+        cursor = self.conn.cursor()
+
+        # Find certificates that are NOT the latest scan result for any endpoint
+        cursor.execute("""
+            DELETE FROM certificate_scans WHERE certificate_id IN (
+                SELECT c.id FROM certificates c
+                WHERE c.id NOT IN (
+                    SELECT cs.certificate_id
+                    FROM certificate_scans cs
+                    WHERE cs.status = 'success'
+                    AND cs.scanned_at = (
+                        SELECT MAX(cs2.scanned_at)
+                        FROM certificate_scans cs2
+                        WHERE cs2.endpoint_id = cs.endpoint_id
+                    )
+                )
+            )
+        """)
+        cursor.execute("""
+            DELETE FROM certificates WHERE id NOT IN (
+                SELECT cs.certificate_id
+                FROM certificate_scans cs
+                WHERE cs.status = 'success'
+                AND cs.scanned_at = (
+                    SELECT MAX(cs2.scanned_at)
+                    FROM certificate_scans cs2
+                    WHERE cs2.endpoint_id = cs.endpoint_id
+                )
+            )
+        """)
+        deleted = cursor.rowcount
+        self.conn.commit()
+        return deleted
+
     # ==================== Audit Log Methods ====================
 
     def add_audit_log(self, user_email: str, action: str, resource_type: str = None,

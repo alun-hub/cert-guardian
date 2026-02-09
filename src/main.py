@@ -238,6 +238,9 @@ class CertificateGuardian:
         """Run one scan cycle"""
         logger.info("=== Starting scan cycle ===")
         self.scan_all_endpoints()
+        deleted = self.db.cleanup_orphaned_certificates()
+        if deleted:
+            logger.info(f"Cleaned up {deleted} orphaned certificate(s)")
         logger.info("=== Scan cycle complete ===")
     
     def run_continuous(self):
