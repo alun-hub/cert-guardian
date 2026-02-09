@@ -6,6 +6,7 @@ import ssl
 import socket
 import hashlib
 import ipaddress
+import re
 from datetime import datetime
 from typing import Optional, Dict, List
 from dataclasses import dataclass
@@ -59,11 +60,13 @@ class TLSScanner:
         self.timeout = timeout
         self.custom_ca_pems = custom_ca_pems or []
         self._custom_ca_file = None
+        self._parsed_cas = None
 
     def set_custom_cas(self, ca_pems: List[str]):
         """Update custom CA certificates"""
         self.custom_ca_pems = ca_pems
-        self._custom_ca_file = None  # Reset cached file
+        self._custom_ca_file = None
+        self._parsed_cas = None
 
     def _get_ca_context(self) -> ssl.SSLContext:
         """Create SSL context with system + custom CAs"""
@@ -92,6 +95,136 @@ class TLSScanner:
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
         return context
+
+    def _get_known_certs(self) -> list:
+        """Get parsed CA certificates (cached) for chain building"""
+        if self._parsed_cas is not None:
+            return self._parsed_cas
+
+        certs = []
+        for pem in self.custom_ca_pems:
+            for block in re.finditer(
+                r'(-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----)', pem
+            ):
+                try:
+                    ca = x509.load_pem_x509_certificate(
+                        block.group(1).encode(), default_backend()
+                    )
+                    certs.append(ca)
+                except Exception:
+                    continue
+
+        if CA_FILE:
+            try:
+                with open(CA_FILE, 'r') as f:
+                    system_pem = f.read()
+                for block in re.finditer(
+                    r'(-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----)',
+                    system_pem
+                ):
+                    try:
+                        ca = x509.load_pem_x509_certificate(
+                            block.group(1).encode(), default_backend()
+                        )
+                        certs.append(ca)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        self._parsed_cas = certs
+        return certs
+
+    def _match_hostname(self, host: str, san_list: List[str], cn: Optional[str] = None) -> bool:
+        """Check if hostname matches certificate SAN entries or CN (RFC 6125)"""
+        # Per RFC 6125: if SAN is present, only check SAN, ignore CN
+        names_to_check = san_list if san_list else ([cn] if cn else [])
+        if not names_to_check:
+            return False
+
+        host_ip = None
+        try:
+            host_ip = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+
+        for name in names_to_check:
+            if host_ip is not None:
+                try:
+                    if host_ip == ipaddress.ip_address(name):
+                        return True
+                except ValueError:
+                    continue
+            else:
+                if self._dns_name_matches(host.lower(), name.lower()):
+                    return True
+
+        return False
+
+    def _dns_name_matches(self, hostname: str, pattern: str) -> bool:
+        """Match hostname against DNS pattern with wildcard support (RFC 6125)"""
+        if hostname == pattern:
+            return True
+
+        # Wildcard matching: *.example.com
+        if pattern.startswith('*.') and '.' in hostname:
+            suffix = pattern[2:]
+            if hostname.endswith('.' + suffix):
+                prefix = hostname[:-(len(suffix) + 1)]
+                # Wildcard matches exactly one label (no dots)
+                if '.' not in prefix and len(prefix) > 0:
+                    return True
+
+        return False
+
+    def _build_chain_info(self, leaf_cert) -> tuple:
+        """Build certificate chain from known CAs and check expiry.
+
+        Returns:
+            (chain_length, chain_has_expiring) tuple
+        """
+        known_certs = self._get_known_certs()
+
+        chain = [leaf_cert]
+        current = leaf_cert
+
+        if not known_certs:
+            if current.subject == current.issuer:
+                return (1, False)
+            return (None, None)
+
+        # Walk the chain upward (max 10 to prevent loops)
+        for _ in range(10):
+            if current.subject == current.issuer:
+                break  # Self-signed root
+
+            found = False
+            for ca in known_certs:
+                if ca.subject == current.issuer:
+                    # Avoid adding the leaf cert itself
+                    if ca.serial_number == current.serial_number:
+                        continue
+                    chain.append(ca)
+                    current = ca
+                    found = True
+                    break
+
+            if not found:
+                break
+
+        chain_length = len(chain)
+        chain_has_expiring = False
+        for c in chain[1:]:  # Skip leaf cert
+            try:
+                not_after = c.not_valid_after_utc.replace(tzinfo=None)
+            except AttributeError:
+                not_after = c.not_valid_after
+            days = (not_after - datetime.utcnow()).days
+            if days <= 30:
+                chain_has_expiring = True
+                break
+
+        return (chain_length, chain_has_expiring)
 
     def scan_endpoint(self, host: str, port: int = 443) -> Optional[CertificateInfo]:
         """
@@ -220,7 +353,7 @@ class TLSScanner:
                     except x509.ExtensionNotFound:
                         pass
 
-                    # Hostname match (best-effort)
+                    # Hostname match (RFC 6125)
                     hostname_matches = None
                     try:
                         cn = None
@@ -228,28 +361,9 @@ class TLSScanner:
                             cn = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
                         except Exception:
                             cn = None
-
-                        match_cert = {}
-                        if cn:
-                            match_cert["subject"] = ((("commonName", cn),),)
-
-                        san_entries = []
-                        for san in san_list:
-                            try:
-                                ipaddress.ip_address(san)
-                                san_entries.append(("IP Address", san))
-                            except ValueError:
-                                san_entries.append(("DNS", san))
-                        if san_entries:
-                            match_cert["subjectAltName"] = san_entries
-
-                        if match_cert:
-                            ssl.match_hostname(match_cert, host)
-                            hostname_matches = True
-                        else:
-                            hostname_matches = None
+                        hostname_matches = self._match_hostname(host, san_list, cn)
                     except Exception:
-                        hostname_matches = False
+                        hostname_matches = None
 
                     # OCSP / CRL presence
                     ocsp_present = None
@@ -296,30 +410,8 @@ class TLSScanner:
                         key_usage_digital_signature = None
                         key_usage_key_encipherment = None
 
-                    # Chain length + expiring intermediates (best-effort)
-                    chain_length = None
-                    chain_has_expiring = None
-                    try:
-                        chain = None
-                        if hasattr(secure_sock, "get_verified_chain"):
-                            chain = secure_sock.get_verified_chain()
-                        elif hasattr(secure_sock, "getpeercertchain"):
-                            chain = secure_sock.getpeercertchain()
-                        if chain:
-                            chain_length = len(chain)
-                            chain_has_expiring = False
-                            for cert_bytes in chain:
-                                try:
-                                    c = x509.load_der_x509_certificate(cert_bytes, default_backend())
-                                    days = (c.not_valid_after_utc.replace(tzinfo=None) - datetime.utcnow()).days
-                                    if days <= 30:
-                                        chain_has_expiring = True
-                                        break
-                                except Exception:
-                                    continue
-                    except Exception:
-                        chain_length = None
-                        chain_has_expiring = None
+                    # Chain length + expiring intermediates
+                    chain_length, chain_has_expiring = self._build_chain_info(cert)
 
                     weak_signature = None
                     if signature_algorithm:

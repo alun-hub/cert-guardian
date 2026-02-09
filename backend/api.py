@@ -1569,66 +1569,106 @@ async def add_trusted_ca(
     request: Request,
     user: User = Depends(require_editor)
 ):
-    """Add a trusted CA certificate (editor+)"""
+    """Add a trusted CA certificate or CA bundle (editor+)"""
     import hashlib
+    import re
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
 
     try:
-        # Parse the PEM certificate
         pem_data = ca.pem_data.strip()
-        if not pem_data.startswith("-----BEGIN CERTIFICATE-----"):
+        if "-----BEGIN CERTIFICATE-----" not in pem_data:
             raise HTTPException(status_code=400, detail="Invalid PEM format")
 
-        cert = x509.load_pem_x509_certificate(pem_data.encode(), default_backend())
-
-        # Extract certificate info
-        fingerprint = hashlib.sha256(cert.public_bytes(
-            encoding=serialization.Encoding.DER
-        )).hexdigest()
-
-        subject_parts = []
-        for attr in cert.subject:
-            subject_parts.append(f"{attr.oid._name}={attr.value}")
-        subject = ", ".join(subject_parts)
-
-        issuer_parts = []
-        for attr in cert.issuer:
-            issuer_parts.append(f"{attr.oid._name}={attr.value}")
-        issuer = ", ".join(issuer_parts)
-
-        not_after = cert.not_valid_after_utc.isoformat()
-
-        # Add to database
-        ca_id = db.add_trusted_ca(
-            name=ca.name,
-            pem_data=pem_data,
-            fingerprint=fingerprint,
-            subject=subject,
-            issuer=issuer,
-            not_after=not_after
+        # Split PEM bundle into individual certificates
+        pem_blocks = re.findall(
+            r'(-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----)',
+            pem_data
         )
+
+        if not pem_blocks:
+            raise HTTPException(status_code=400, detail="No valid PEM certificates found")
+
+        added = []
+        for i, pem_block in enumerate(pem_blocks):
+            pem_block = pem_block.strip()
+            cert = x509.load_pem_x509_certificate(pem_block.encode(), default_backend())
+
+            fingerprint = hashlib.sha256(cert.public_bytes(
+                encoding=serialization.Encoding.DER
+            )).hexdigest()
+
+            subject_parts = []
+            for attr in cert.subject:
+                subject_parts.append(f"{attr.oid._name}={attr.value}")
+            subject = ", ".join(subject_parts)
+
+            issuer_parts = []
+            for attr in cert.issuer:
+                issuer_parts.append(f"{attr.oid._name}={attr.value}")
+            issuer = ", ".join(issuer_parts)
+
+            not_after = cert.not_valid_after_utc.isoformat()
+
+            # Use subject CN as name for bundle certs, fallback to indexed name
+            if len(pem_blocks) == 1:
+                cert_name = ca.name
+            else:
+                try:
+                    cn = cert.subject.get_attributes_for_oid(
+                        x509.NameOID.COMMON_NAME
+                    )[0].value
+                    cert_name = cn
+                except Exception:
+                    cert_name = f"{ca.name} ({i+1})"
+
+            ca_id = db.add_trusted_ca(
+                name=cert_name,
+                pem_data=pem_block,
+                fingerprint=fingerprint,
+                subject=subject,
+                issuer=issuer,
+                not_after=not_after
+            )
+
+            added.append({
+                "id": ca_id,
+                "fingerprint": fingerprint,
+                "subject": subject
+            })
 
         # Refresh scanner's CA list
         scanner.set_custom_cas(db.get_all_trusted_ca_pems())
 
         # Audit log
+        if len(added) == 1:
+            details = f"Added trusted CA '{ca.name}'"
+        else:
+            details = f"Added {len(added)} CA certificates from bundle '{ca.name}'"
+
         audit_log(
             user_email=user.email,
             action="ca_create",
             resource_type="trusted_ca",
-            resource_id=ca_id,
-            details=f"Added trusted CA '{ca.name}'",
+            resource_id=added[0]["id"],
+            details=details,
             ip_address=get_client_ip(request)
         )
 
-        return {
-            "id": ca_id,
-            "fingerprint": fingerprint,
-            "subject": subject,
-            "message": "Trusted CA added successfully"
-        }
+        if len(added) == 1:
+            return {
+                "id": added[0]["id"],
+                "fingerprint": added[0]["fingerprint"],
+                "subject": added[0]["subject"],
+                "message": "Trusted CA added successfully"
+            }
+        else:
+            return {
+                "certificates": added,
+                "total": len(added),
+                "message": f"Added {len(added)} CA certificates from bundle"
+            }
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid certificate: {str(e)}")

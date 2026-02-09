@@ -8,6 +8,7 @@ export default function Settings() {
   const [trustedCAs, setTrustedCAs] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [successMsg, setSuccessMsg] = useState('')
   const [scannerSettings, setScannerSettings] = useState(null)
   const [scannerLoading, setScannerLoading] = useState(true)
   const [scannerSaving, setScannerSaving] = useState(false)
@@ -146,7 +147,7 @@ export default function Settings() {
             <div>
               <h2 className="text-lg font-semibold">Trusted CA Certificates</h2>
               <p className="text-sm text-gray-500">
-                Add custom root CAs to trust certificates signed by them
+                Add custom CA certificates or bundles to trust certificates signed by them
               </p>
             </div>
           </div>
@@ -160,6 +161,12 @@ export default function Settings() {
             </button>
           )}
         </div>
+
+        {successMsg && (
+          <div className="mb-4 p-3 bg-green-100 border border-green-300 text-green-700 rounded-lg text-sm">
+            {successMsg}
+          </div>
+        )}
 
         {loading ? (
           <div className="text-center py-8">
@@ -453,9 +460,13 @@ export default function Settings() {
       {showAddModal && (
         <AddCAModal
           onClose={() => setShowAddModal(false)}
-          onSuccess={() => {
+          onSuccess={(msg) => {
             setShowAddModal(false)
             loadTrustedCAs()
+            if (msg) {
+              setSuccessMsg(msg)
+              setTimeout(() => setSuccessMsg(''), 5000)
+            }
           }}
         />
       )}
@@ -494,8 +505,9 @@ function AddCAModal({ onClose, onSuccess }) {
 
     try {
       setSubmitting(true)
-      await api.post('/trusted-cas', { name, pem_data: pemData })
-      onSuccess()
+      const response = await api.post('/trusted-cas', { name, pem_data: pemData })
+      const count = response.data?.total || 1
+      onSuccess(count > 1 ? `Added ${count} certificates from bundle` : null)
     } catch (err) {
       const detail = err.response?.data?.detail
       setError(detail || 'Failed to add CA')
@@ -508,7 +520,7 @@ function AddCAModal({ onClose, onSuccess }) {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b">
-          <h2 className="text-xl font-semibold">Add Trusted CA Certificate</h2>
+          <h2 className="text-xl font-semibold">Add Trusted CA Certificate(s)</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
@@ -540,7 +552,7 @@ function AddCAModal({ onClose, onSuccess }) {
               <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-500">
                 <Upload className="w-5 h-5 text-gray-400" />
                 <span className="text-sm text-gray-600">
-                  Click to upload .pem, .crt, or .cer file
+                  Click to upload .pem, .crt, or .cer file (single or bundle)
                 </span>
                 <input
                   type="file"
