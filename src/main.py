@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from database import Database
 from scanner import TLSScanner
 from notifier import MattermostNotifier
+from ca_bundle import update_ca_bundle
 
 # Setup logging
 logging.basicConfig(
@@ -41,8 +42,13 @@ class CertificateGuardian:
         db_path = self.config['database']['path']
         self.db = Database(db_path)
         
+        # Load custom CAs and build outbound TLS bundle
+        custom_ca_pems = self.db.get_all_trusted_ca_pems()
+        update_ca_bundle(custom_ca_pems)
+
         self.scanner = TLSScanner(
-            timeout=self.config['scanner'].get('timeout_seconds', 10)
+            timeout=self.config['scanner'].get('timeout_seconds', 10),
+            custom_ca_pems=custom_ca_pems
         )
         
         webhook_url = self.config['mattermost']['webhook_url']

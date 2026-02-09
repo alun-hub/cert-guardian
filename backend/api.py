@@ -20,6 +20,7 @@ from scanner import TLSScanner
 from notifier import MattermostNotifier
 from auth import AuthManager, User, LocalAuthProvider
 from siem_client import SiemClient
+from ca_bundle import update_ca_bundle
 import yaml
 import time as _time
 
@@ -213,6 +214,9 @@ async def startup_event():
 
     # Load custom CAs from database
     custom_ca_pems = db.get_all_trusted_ca_pems()
+
+    # Build combined CA bundle for outbound TLS (Mattermost, etc.)
+    update_ca_bundle(custom_ca_pems)
 
     # Initialize scanner with custom CAs
     scanner = TLSScanner(
@@ -1638,8 +1642,10 @@ async def add_trusted_ca(
                 "subject": subject
             })
 
-        # Refresh scanner's CA list
-        scanner.set_custom_cas(db.get_all_trusted_ca_pems())
+        # Refresh scanner's CA list and outbound TLS bundle
+        custom_pems = db.get_all_trusted_ca_pems()
+        scanner.set_custom_cas(custom_pems)
+        update_ca_bundle(custom_pems)
 
         # Audit log
         if len(added) == 1:
@@ -1688,8 +1694,10 @@ async def delete_trusted_ca(
     ca_info = next((c for c in cas if c['id'] == ca_id), None)
 
     if db.delete_trusted_ca(ca_id):
-        # Refresh scanner's CA list
-        scanner.set_custom_cas(db.get_all_trusted_ca_pems())
+        # Refresh scanner's CA list and outbound TLS bundle
+        custom_pems = db.get_all_trusted_ca_pems()
+        scanner.set_custom_cas(custom_pems)
+        update_ca_bundle(custom_pems)
 
         # Audit log
         audit_log(
