@@ -92,7 +92,10 @@ class TLSScanner:
 
             context = ssl.create_default_context(cafile=self._custom_ca_file)
 
-        context.check_hostname = True
+        # Only verify CA chain trust, NOT hostname.
+        # Hostname matching is done separately by _match_hostname()
+        # so that is_trusted_ca reflects pure CA trust.
+        context.check_hostname = False
         context.verify_mode = ssl.CERT_REQUIRED
         return context
 

@@ -237,6 +237,10 @@ class CertificateGuardian:
     def run_once(self):
         """Run one scan cycle"""
         logger.info("=== Starting scan cycle ===")
+        # Reload custom CAs from DB (may have been added via UI since last cycle)
+        custom_ca_pems = self.db.get_all_trusted_ca_pems()
+        self.scanner.set_custom_cas(custom_ca_pems)
+        update_ca_bundle(custom_ca_pems)
         self.scan_all_endpoints()
         deleted = self.db.cleanup_orphaned_certificates()
         if deleted:
