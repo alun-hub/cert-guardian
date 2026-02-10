@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router'
 import { Lock, LayoutDashboard, Server, Shield, Settings, Network, Users, LogOut, User, Info, ScrollText } from 'lucide-react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Dashboard from './pages/Dashboard'

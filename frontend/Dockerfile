@@ -1,4 +1,4 @@
-FROM docker.io/node:20-alpine AS builder
+FROM docker.io/node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY . .
 RUN npm run build
 
 # Production image
-FROM docker.io/nginx:alpine
+FROM docker.io/nginx:stable-alpine
 
 # Timezone support
 RUN apk add --no-cache tzdata
