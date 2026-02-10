@@ -31,6 +31,31 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Serialized refresh queue - prevents multiple concurrent refresh attempts
+let refreshPromise = null
+
+function doRefresh() {
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true })
+      .then((response) => {
+        const newToken = response.data.access_token
+        setAccessToken(newToken)
+        window.dispatchEvent(new CustomEvent('auth:refreshed'))
+        return newToken
+      })
+      .catch((err) => {
+        clearAccessToken()
+        window.dispatchEvent(new CustomEvent('auth:logout'))
+        throw err
+      })
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+  return refreshPromise
+}
+
 // Handle 401 responses - try to refresh token
 api.interceptors.response.use(
   (response) => response,
@@ -41,23 +66,10 @@ api.interceptors.response.use(
       originalRequest._retry = true
 
       try {
-        // Try to refresh token
-        const response = await axios.post(
-          `${API_BASE}/auth/refresh`,
-          {},
-          { withCredentials: true }
-        )
-
-        const newToken = response.data.access_token
-        setAccessToken(newToken)
-
-        // Retry original request with new token
+        const newToken = await doRefresh()
         originalRequest.headers.Authorization = `Bearer ${newToken}`
         return api(originalRequest)
       } catch (refreshError) {
-        // Refresh failed - user needs to login again
-        clearAccessToken()
-        window.dispatchEvent(new CustomEvent('auth:logout'))
         return Promise.reject(refreshError)
       }
     }
