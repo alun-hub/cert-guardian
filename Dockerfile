@@ -7,7 +7,8 @@ COPY requirements.txt ./
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tzdata && \
     rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --root-user-action=ignore --upgrade pip && \
+    pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
 
 # Copy application files
 COPY src/ /app/src/
