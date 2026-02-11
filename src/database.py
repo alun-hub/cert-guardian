@@ -238,16 +238,18 @@ class Database:
         self.conn.commit()
     
     def add_endpoint(self, host: str, port: int, owner: str = None,
-                     criticality: str = "medium", created_by: str = None) -> int:
+                     criticality: str = "medium", created_by: str = None,
+                     webhook_url: str = None) -> int:
         """Add or update an endpoint"""
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO endpoints (host, port, owner, criticality, created_by)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO endpoints (host, port, owner, criticality, created_by, webhook_url)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(host, port) DO UPDATE SET
                 owner = excluded.owner,
-                criticality = excluded.criticality
-        """, (host, port, owner, criticality, created_by))
+                criticality = excluded.criticality,
+                webhook_url = excluded.webhook_url
+        """, (host, port, owner, criticality, created_by, webhook_url))
         self.conn.commit()
         return cursor.lastrowid
     

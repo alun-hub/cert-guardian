@@ -87,6 +87,7 @@ class EndpointCreate(BaseModel):
     port: int = 443
     owner: Optional[str] = None
     criticality: str = "medium"
+    webhook_url: Optional[str] = None
 
 
 class EndpointUpdate(BaseModel):
@@ -1204,7 +1205,8 @@ async def create_endpoint(
         port=endpoint.port,
         owner=endpoint.owner,
         criticality=endpoint.criticality,
-        created_by=user.email
+        created_by=user.email,
+        webhook_url=endpoint.webhook_url
     )
 
     # Audit log
