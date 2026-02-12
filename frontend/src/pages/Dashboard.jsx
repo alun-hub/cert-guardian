@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
-import { 
-  AlertTriangle, 
-  CheckCircle, 
-  XCircle, 
+import {
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
   Clock,
   RefreshCw,
   Shield,
-  AlertOctagon
+  AlertOctagon,
+  Globe
 } from 'lucide-react'
 import {
   BarChart,
@@ -125,7 +126,7 @@ export default function Dashboard() {
       </div>
 
       {/* Security & Health */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <StatCard
           title="Weak Keys"
           value={stats.weak_keys}
@@ -139,6 +140,13 @@ export default function Dashboard() {
           subtitle="TLS 1.0/1.1 endpoints"
           icon={<AlertOctagon className="w-6 h-6 text-red-500" />}
           color="red"
+        />
+        <StatCard
+          title="Header Issues"
+          value={stats.header_issues}
+          subtitle="Grade D/F endpoints"
+          icon={<Globe className="w-6 h-6 text-purple-500" />}
+          color="purple"
         />
         <StatCard
           title="Cert Changes (24h)"
@@ -217,6 +225,7 @@ function StatCard({ title, value, subtitle, icon, color }) {
     red: 'bg-red-50 border-red-200',
     orange: 'bg-orange-50 border-orange-200',
     gray: 'bg-gray-50 border-gray-200',
+    purple: 'bg-purple-50 border-purple-200',
   }
 
   return (

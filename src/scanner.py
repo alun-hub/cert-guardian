@@ -23,6 +23,8 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed448
 
+from http_scanner import HTTPHeaderScanner
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +55,14 @@ class CertificateInfo:
     key_usage_key_encipherment: Optional[bool]
     chain_has_expiring: Optional[bool]
     weak_signature: Optional[bool]
+    # HTTP header scan results
+    header_score: Optional[int] = None
+    header_grade: Optional[str] = None
+    headers_present: Optional[List[str]] = None
+    headers_missing: Optional[List[str]] = None
+    hsts_max_age: Optional[int] = None
+    csp_has_unsafe_inline: Optional[bool] = None
+    header_recommendations: Optional[List[str]] = None
 
 
 class TLSScanner:
@@ -447,6 +457,21 @@ class TLSScanner:
                         chain_has_expiring=chain_has_expiring,
                         weak_signature=weak_signature
                     )
+
+                    # HTTP header scan
+                    try:
+                        http_scanner = HTTPHeaderScanner(timeout=self.timeout)
+                        header_result = http_scanner.scan_headers(host, port)
+                        if header_result:
+                            cert_info.header_score = header_result.header_score
+                            cert_info.header_grade = header_result.header_grade
+                            cert_info.headers_present = header_result.headers_present
+                            cert_info.headers_missing = header_result.headers_missing
+                            cert_info.hsts_max_age = header_result.hsts_max_age
+                            cert_info.csp_has_unsafe_inline = header_result.csp_has_unsafe_inline
+                            cert_info.header_recommendations = header_result.recommendations
+                    except Exception as e:
+                        logger.warning(f"HTTP header scan failed for {host}:{port}: {e}")
 
                     status_msg = f"Successfully scanned {host}:{port} - expires {not_after}"
                     if is_self_signed:

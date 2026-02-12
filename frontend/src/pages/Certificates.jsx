@@ -577,6 +577,56 @@ function CertificateDetailsRow({ cert, loading }) {
                 </div>
               </div>
             </div>
+            {/* HTTP Headers */}
+            {cert.header_grade && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">HTTP Headers</p>
+                <div className="mt-1 flex items-center gap-3">
+                  <span className={`px-2 py-1 text-xs font-bold rounded ${
+                    cert.header_grade === 'A' ? 'bg-green-100 text-green-800' :
+                    cert.header_grade === 'B' ? 'bg-blue-100 text-blue-800' :
+                    cert.header_grade === 'C' ? 'bg-yellow-100 text-yellow-800' :
+                    cert.header_grade === 'D' ? 'bg-orange-100 text-orange-800' :
+                    'bg-red-100 text-red-800'
+                  }`}>
+                    Grade {cert.header_grade}
+                  </span>
+                  <span className="text-gray-700">{cert.header_score}/100</span>
+                </div>
+                {(() => {
+                  const missing = Array.isArray(cert.headers_missing)
+                    ? cert.headers_missing
+                    : (cert.headers_missing ? [cert.headers_missing] : [])
+                  return missing.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-500 mb-1">Missing:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {missing.map((h) => (
+                          <span key={h} className="px-2 py-0.5 text-xs bg-red-50 text-red-700 rounded">
+                            {h}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })()}
+                {(() => {
+                  const recs = Array.isArray(cert.header_recommendations)
+                    ? cert.header_recommendations
+                    : (cert.header_recommendations ? [cert.header_recommendations] : [])
+                  return recs.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-500 mb-1">Recommendations:</p>
+                      <ul className="space-y-1">
+                        {recs.map((rec, i) => (
+                          <li key={i} className="text-xs text-gray-700">- {rec}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )
+                })()}
+              </div>
+            )}
             {cert.validation_error && (
               <div>
                 <p className="text-xs text-gray-500 uppercase tracking-wider">Validation</p>

@@ -193,6 +193,7 @@ class DashboardStats(BaseModel):
     weak_keys: int
     legacy_tls: int
     cert_changes_24h: int
+    header_issues: int
 
 
 class CertificateInfo(BaseModel):
@@ -817,6 +818,13 @@ async def get_dashboard_stats(user: User = Depends(require_auth)):
     """)
     cert_changes_24h = cursor.fetchone()[0]
     
+    # Header issues (grade D or F)
+    cursor.execute("""
+        SELECT COUNT(DISTINCT id) FROM certificates
+        WHERE header_grade IN ('D', 'F')
+    """)
+    header_issues = cursor.fetchone()[0]
+
     return DashboardStats(
         total_certificates=total_certs,
         total_endpoints=total_endpoints,
@@ -830,7 +838,8 @@ async def get_dashboard_stats(user: User = Depends(require_auth)):
         last_scan_status=last_scan_status,
         weak_keys=weak_keys,
         legacy_tls=legacy_tls,
-        cert_changes_24h=cert_changes_24h
+        cert_changes_24h=cert_changes_24h,
+        header_issues=header_issues,
     )
 
 
@@ -848,7 +857,7 @@ async def get_certificates(
     cursor = db.conn.cursor()
     
     query = """
-        SELECT 
+        SELECT
             c.id,
             c.fingerprint,
             c.subject,
@@ -867,6 +876,13 @@ async def get_certificates(
             c.key_usage_key_encipherment,
             c.chain_has_expiring,
             c.weak_signature,
+            c.header_score,
+            c.header_grade,
+            c.headers_present,
+            c.headers_missing,
+            c.hsts_max_age,
+            c.csp_has_unsafe_inline,
+            c.header_recommendations,
             julianday(c.not_after) - julianday('now') as days_until_expiry
         FROM certificates c
         WHERE 1=1
@@ -891,10 +907,20 @@ async def get_certificates(
     
     cursor.execute(query, params)
     
+    import json as _json_certs
+
     results = []
     for row in cursor.fetchall():
         cert_dict = dict(row)
-        
+
+        # Parse header JSON arrays
+        for field in ("headers_present", "headers_missing", "header_recommendations"):
+            if cert_dict.get(field):
+                try:
+                    cert_dict[field] = _json_certs.loads(cert_dict[field])
+                except Exception:
+                    pass
+
         # Get endpoints where the LATEST scan returned this certificate
         cursor.execute("""
             SELECT e.id, e.host, e.port, e.owner, e.criticality
@@ -1151,6 +1177,14 @@ async def get_certificate(cert_id: int, user: User = Depends(require_auth)):
             cert_dict['san_list'] = json.loads(cert_dict['san_list'])
         except Exception:
             pass
+    # Parse header JSON arrays
+    for hdr_field in ("headers_present", "headers_missing", "header_recommendations"):
+        if cert_dict.get(hdr_field):
+            try:
+                import json
+                cert_dict[hdr_field] = json.loads(cert_dict[hdr_field])
+            except Exception:
+                pass
     
     # Get endpoints
     cursor.execute("""
@@ -1464,7 +1498,14 @@ async def trigger_scan(
                     is_self_signed=cert_info.is_self_signed,
                     is_trusted_ca=cert_info.is_trusted_ca,
                     validation_error=cert_info.validation_error,
-                    chain_length=cert_info.chain_length
+                    chain_length=cert_info.chain_length,
+                    header_score=cert_info.header_score,
+                    header_grade=cert_info.header_grade,
+                    headers_present=cert_info.headers_present,
+                    headers_missing=cert_info.headers_missing,
+                    hsts_max_age=cert_info.hsts_max_age,
+                    csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
+                    header_recommendations=cert_info.header_recommendations,
                 )
                 db.add_scan(
                     cert_id, endpoint_id, 'success',
@@ -1476,7 +1517,7 @@ async def trigger_scan(
             endpoints = db.get_all_endpoints()
             for endpoint in endpoints:
                 cert_info = scanner.scan_endpoint(endpoint['host'], endpoint['port'])
-                
+
                 if cert_info:
                     cert_id = db.add_certificate(
                         fingerprint=cert_info.fingerprint,
@@ -1500,7 +1541,14 @@ async def trigger_scan(
                         is_self_signed=cert_info.is_self_signed,
                         is_trusted_ca=cert_info.is_trusted_ca,
                         validation_error=cert_info.validation_error,
-                        chain_length=cert_info.chain_length
+                        chain_length=cert_info.chain_length,
+                        header_score=cert_info.header_score,
+                        header_grade=cert_info.header_grade,
+                        headers_present=cert_info.headers_present,
+                        headers_missing=cert_info.headers_missing,
+                        hsts_max_age=cert_info.hsts_max_age,
+                        csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
+                        header_recommendations=cert_info.header_recommendations,
                     )
                     db.add_scan(
                         cert_id, endpoint['id'], 'success',
@@ -1580,6 +1628,55 @@ async def get_security_issues(user: User = Depends(require_auth)):
         "self_signed_count": len([c for c in untrusted if c['is_self_signed']]),
         "untrusted_count": len([c for c in untrusted if not c['is_trusted_ca'] and not c['is_self_signed']])
     }
+
+
+# Get HTTP header analysis
+@app.get("/api/security/headers")
+async def get_header_analysis(user: User = Depends(require_auth)):
+    """Return HTTP header security analysis per endpoint"""
+    cursor = db.conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            c.id AS cert_id,
+            e.id AS endpoint_id,
+            e.host,
+            e.port,
+            c.header_score,
+            c.header_grade,
+            c.headers_present,
+            c.headers_missing,
+            c.hsts_max_age,
+            c.csp_has_unsafe_inline,
+            c.header_recommendations
+        FROM certificates c
+        JOIN certificate_scans cs ON c.id = cs.certificate_id
+        JOIN endpoints e ON cs.endpoint_id = e.id
+        WHERE cs.status = 'success'
+        AND cs.scanned_at = (
+            SELECT MAX(scanned_at)
+            FROM certificate_scans
+            WHERE endpoint_id = e.id
+        )
+        AND c.header_grade IS NOT NULL
+        ORDER BY c.header_score ASC
+    """)
+
+    import json as _json
+
+    results = []
+    for row in cursor.fetchall():
+        entry = dict(row)
+        # Parse JSON arrays
+        for field in ("headers_present", "headers_missing", "header_recommendations"):
+            if entry.get(field):
+                try:
+                    entry[field] = _json.loads(entry[field])
+                except Exception:
+                    pass
+        results.append(entry)
+
+    return {"headers": results, "total": len(results)}
 
 
 # Send test notification
@@ -2003,7 +2100,14 @@ async def execute_sweep(sweep_id: int):
                     is_self_signed=cert_info.is_self_signed,
                     is_trusted_ca=cert_info.is_trusted_ca,
                     validation_error=cert_info.validation_error,
-                    chain_length=cert_info.chain_length
+                    chain_length=cert_info.chain_length,
+                    header_score=cert_info.header_score,
+                    header_grade=cert_info.header_grade,
+                    headers_present=cert_info.headers_present,
+                    headers_missing=cert_info.headers_missing,
+                    hsts_max_age=cert_info.hsts_max_age,
+                    csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
+                    header_recommendations=cert_info.header_recommendations,
                 )
                 db.add_scan(
                     cert_id, endpoint_id, 'success',

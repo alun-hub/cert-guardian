@@ -127,9 +127,16 @@ class CertificateGuardian:
                 is_self_signed=cert_info.is_self_signed,
                 is_trusted_ca=cert_info.is_trusted_ca,
                 validation_error=cert_info.validation_error,
-                chain_length=cert_info.chain_length
+                chain_length=cert_info.chain_length,
+                header_score=cert_info.header_score,
+                header_grade=cert_info.header_grade,
+                headers_present=cert_info.headers_present,
+                headers_missing=cert_info.headers_missing,
+                hsts_max_age=cert_info.hsts_max_age,
+                csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
+                header_recommendations=cert_info.header_recommendations,
             )
-            
+
             # Record successful scan
             self.db.add_scan(
                 cert_id, endpoint_id, 'success',

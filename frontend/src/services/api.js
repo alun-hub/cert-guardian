@@ -127,6 +127,7 @@ export const scanService = {
 
 export const securityService = {
   getIssues: () => api.get('/security/issues'),
+  getHeaders: () => api.get('/security/headers'),
 }
 
 export const notificationService = {

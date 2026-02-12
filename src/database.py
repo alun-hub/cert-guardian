@@ -130,6 +130,21 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
+        # Migrations for HTTP header scan results
+        for col_def in [
+            "header_score INTEGER",
+            "header_grade TEXT",
+            "headers_present TEXT",
+            "headers_missing TEXT",
+            "hsts_max_age INTEGER",
+            "csp_has_unsafe_inline INTEGER",
+            "header_recommendations TEXT",
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE certificates ADD COLUMN {col_def}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
         # Migrations for scan metadata
         for col_def in [
             "tls_version TEXT",
@@ -264,11 +279,20 @@ class Database:
                        chain_has_expiring: bool = None,
                        weak_signature: bool = None,
                        is_self_signed: bool = False, is_trusted_ca: bool = False,
-                       validation_error: str = None, chain_length: int = 0) -> int:
+                       validation_error: str = None, chain_length: int = 0,
+                       header_score: int = None, header_grade: str = None,
+                       headers_present: List[str] = None,
+                       headers_missing: List[str] = None,
+                       hsts_max_age: int = None,
+                       csp_has_unsafe_inline: bool = None,
+                       header_recommendations: List[str] = None) -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
         san_json = json.dumps(san_list) if san_list else None
+        headers_present_json = json.dumps(headers_present) if headers_present else None
+        headers_missing_json = json.dumps(headers_missing) if headers_missing else None
+        header_recommendations_json = json.dumps(header_recommendations) if header_recommendations else None
 
         cursor.execute("""
             INSERT INTO certificates (
@@ -278,9 +302,11 @@ class Database:
                 key_usage_digital_signature, key_usage_key_encipherment,
                 chain_has_expiring, weak_signature,
                 is_self_signed, is_trusted_ca, validation_error, chain_length,
+                header_score, header_grade, headers_present, headers_missing,
+                hsts_max_age, csp_has_unsafe_inline, header_recommendations,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 subject = excluded.subject,
                 issuer = excluded.issuer,
@@ -303,6 +329,13 @@ class Database:
                 is_trusted_ca = excluded.is_trusted_ca,
                 validation_error = excluded.validation_error,
                 chain_length = excluded.chain_length,
+                header_score = excluded.header_score,
+                header_grade = excluded.header_grade,
+                headers_present = excluded.headers_present,
+                headers_missing = excluded.headers_missing,
+                hsts_max_age = excluded.hsts_max_age,
+                csp_has_unsafe_inline = excluded.csp_has_unsafe_inline,
+                header_recommendations = excluded.header_recommendations,
                 updated_at = excluded.updated_at
         """, (fingerprint, subject, issuer, not_before, not_after,
               serial_number, san_json, key_type, key_size, signature_algorithm,
@@ -311,7 +344,10 @@ class Database:
               _bool_or_none(key_usage_digital_signature), _bool_or_none(key_usage_key_encipherment),
               _bool_or_none(chain_has_expiring), _bool_or_none(weak_signature),
               int(is_self_signed), int(is_trusted_ca), validation_error,
-              chain_length, now, now))
+              chain_length,
+              header_score, header_grade, headers_present_json, headers_missing_json,
+              hsts_max_age, _bool_or_none(csp_has_unsafe_inline), header_recommendations_json,
+              now, now))
         self.conn.commit()
 
         # Get the actual certificate ID (lastrowid is unreliable with ON CONFLICT)
