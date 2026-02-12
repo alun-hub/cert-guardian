@@ -24,6 +24,8 @@ from siem_client import SiemClient
 from ca_bundle import update_ca_bundle
 import yaml
 import time as _time
+import socket
+import ssl
 
 from backend.metrics import (
     update_certificate_metrics, set_app_info, get_metrics_output,
@@ -1290,6 +1292,29 @@ async def get_endpoint_webhook(
     return {"webhook_url": endpoint_dict.get('webhook_url')}
 
 
+def _probe_tls(host: str, port: int, timeout: int = 3) -> Optional[str]:
+    """Try TLS handshake. Return None on success, error string on failure."""
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except socket.timeout:
+        return "Connection timed out"
+    except OSError as e:
+        return str(e)
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with ctx.wrap_socket(sock, server_hostname=host) as _:
+            pass
+    except ssl.SSLError as e:
+        return f"TLS handshake failed: {e}"
+    except OSError as e:
+        return str(e)
+    finally:
+        sock.close()
+    return None
+
+
 # Create endpoint
 @app.post("/api/endpoints")
 async def create_endpoint(
@@ -1306,6 +1331,13 @@ async def create_endpoint(
         existing_dict = dict(existing)
         if existing_dict.get('created_by') and existing_dict['created_by'] != user.email and not user.has_role("admin"):
             raise HTTPException(status_code=403, detail="Only the creator or an admin can modify this endpoint")
+
+    tls_error = _probe_tls(endpoint.host, endpoint.port)
+    if tls_error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot establish TLS connection to {endpoint.host}:{endpoint.port} — {tls_error}",
+        )
 
     endpoint_id = db.add_endpoint(
         host=endpoint.host,

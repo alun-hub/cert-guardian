@@ -427,6 +427,7 @@ function AddEndpointModal({ onClose, onSuccess }) {
     webhook_url: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState(null)
   const [testingWebhook, setTestingWebhook] = useState(false)
   const [webhookResult, setWebhookResult] = useState(null)
 
@@ -451,14 +452,15 @@ function AddEndpointModal({ onClose, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    
+
     try {
       setSubmitting(true)
+      setError(null)
       await endpointService.create(formData)
       onSuccess()
-    } catch (error) {
-      console.error('Failed to create endpoint:', error)
-      alert('Failed to create endpoint')
+    } catch (err) {
+      console.error('Failed to create endpoint:', err)
+      setError(err.response?.data?.detail || 'Failed to create endpoint')
     } finally {
       setSubmitting(false)
     }
@@ -569,6 +571,12 @@ function AddEndpointModal({ onClose, onSuccess }) {
               </div>
             )}
           </div>
+
+          {error && (
+            <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">
+              {error}
+            </div>
+          )}
 
           <div className="flex gap-3 pt-4">
             <button
