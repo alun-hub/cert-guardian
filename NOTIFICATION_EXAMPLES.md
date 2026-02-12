@@ -236,16 +236,25 @@ Certificate Guardian - Daily Summary
 ## Notification Frequency
 
 ### Expiry Notifications
-- **90 days:** Info (once)
-- **60 days:** Warning (once)
-- **30 days:** Warning (once)
-- **14 days:** Critical (once)
-- **7 days:** Critical (once)
-- **3 days:** Critical (once)
-- **1 day:** Emergency (once)
+
+Varje certifikat får **max en notifiering per threshold-nivå** under hela sin livscykel (totalt max 7 notifieringar). Systemet väljer alltid den lägsta matchande nivån:
+
+- **90 days:** Info (en gång, när cert passerar 90-dagarsgränsen)
+- **60 days:** Warning (en gång)
+- **30 days:** Warning (en gång)
+- **14 days:** Critical (en gång)
+- **7 days:** Critical (en gång)
+- **3 days:** Critical (en gång)
+- **1 day:** Emergency (en gång)
+
+Ett cert som går ut om 5 dagar genererar **en** notifiering (vid 7-dagars threshold), inte fem.
+
+### Per-Endpoint Webhooks
+
+Endpoints kan ha individuella webhook-URL:er. Notifieringar skickas till endpoint-specifik webhook om konfigurerad, annars till global Mattermost-webhook.
 
 ### Security Notifications
-- **Self-signed/Untrusted:** När först detekterad, sedan max en gång per vecka per cert
+- **Self-signed/Untrusted:** När först detekterad (en gång per cert)
 - **Security Summary:** Manuellt via `--security` kommando, rekommenderat dagligen
 
 ### Daily Summary

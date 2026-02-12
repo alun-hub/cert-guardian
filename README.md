@@ -13,7 +13,7 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
   - Dagliga sammanfattningar
   - Per-endpoint webhooks för teamspecifika notifieringar
 - **Spårar certifikathistorik** - ser när cert senast scannades
-- **Undviker spam** - skickar inte samma varning flera gånger inom 24h
+- **Undviker spam** - max en notifiering per threshold-nivå per certifikat (totalt 7 under hela livscykeln)
 - **Containerized** - lätt att deploya med Podman/Docker
 - **Detaljerad certifikatvy** - klicka för att se SAN, key size, signature, TLS version/cipher m.m.
 - **Säkerhetskontroller** - hostname match, OCSP/CRL, EKU/Key Usage, weak signatures, expiring chain
@@ -168,6 +168,10 @@ scanner:
   timeout_seconds: 10
   max_concurrent: 10
 
+server:
+  cors_origins:
+    - "*"  # Ange din frontend-URL i produktion, t.ex. ["https://certs.example.com"]
+
 siem:
   mode: "disabled"  # disabled | stdout | syslog | beats
   host: "siem.example.com"
@@ -238,10 +242,11 @@ Kör via cron eller systemd timer för dagliga rapporter, t.ex.:
 - JWT tokens med kort livslängd
 
 **Tänk på:**
-- Webhook URL innehåller secrets - skydda config-filen
+- Webhook URL innehåller secrets - skydda config-filen (per-endpoint webhooks maskeras i API-svar)
 - Ändra default admin-lösenord omedelbart
 - Använd HTTPS i produktion
-- Konfigurera CORS korrekt för din domän
+- Konfigurera `server.cors_origins` i config.yaml med din frontend-URL i produktion
+- Alla data-endpoints kräver autentisering (JWT token)
 
 ## Felsökning
 

@@ -249,6 +249,8 @@ Ta bort användare.
 
 Hämta dashboard-statistik.
 
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
 **Response:**
 ```json
 {
@@ -266,6 +268,8 @@ Hämta dashboard-statistik.
 ### GET /api/timeline
 
 Hämta certifikat-expiry timeline.
+
+**Headers:** `Authorization: Bearer <token>` (krävs)
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -289,6 +293,8 @@ Hämta certifikat-expiry timeline.
 ### GET /api/certificates
 
 Lista certifikat med filtrering.
+
+**Headers:** `Authorization: Bearer <token>` (krävs)
 
 **Query Parameters:**
 | Parameter | Type | Description |
@@ -330,13 +336,17 @@ Lista certifikat med filtrering.
 
 Hämta certifikatdetaljer.
 
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
 ---
 
 ## Endpoints
 
 ### GET /api/endpoints
 
-Lista alla endpoints.
+Lista alla endpoints. Webhook-URL:er maskeras — endast ägare eller admin ser full URL.
+
+**Headers:** `Authorization: Bearer <token>` (krävs)
 
 **Response:**
 ```json
@@ -349,6 +359,7 @@ Lista alla endpoints.
       "owner": "IT Team",
       "criticality": "high",
       "webhook_url": null,
+      "webhook_url_masked": "https://matte...w5y",
       "last_scan": "2025-01-15T10:00:00",
       "certificate": {
         "subject": "CN=example.com",
@@ -357,6 +368,22 @@ Lista alla endpoints.
       }
     }
   ]
+}
+```
+
+---
+
+### GET /api/endpoints/{endpoint_id}/webhook
+
+Hämta full (omaskerad) webhook-URL för en endpoint.
+
+**Headers:** `Authorization: Bearer <token>` (editor+ krävs, ägare eller admin)
+
+**Response:**
+```json
+{
+  "endpoint_id": 1,
+  "webhook_url": "https://mattermost.example.com/hooks/xxxxx"
 }
 ```
 
@@ -462,6 +489,8 @@ Använd `null` för att scanna alla endpoints:
 
 Validera sweep-target och få antal IP-adresser.
 
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
 **Request Body:**
 ```json
 {
@@ -514,6 +543,8 @@ Skapa och starta network sweep.
 
 Lista alla sweeps.
 
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
 **Response:**
 ```json
 {
@@ -537,6 +568,8 @@ Lista alla sweeps.
 ### GET /api/sweeps/{sweep_id}
 
 Hämta sweep med resultat.
+
+**Headers:** `Authorization: Bearer <token>` (krävs)
 
 **Response:**
 ```json
@@ -583,6 +616,8 @@ Starta om befintlig sweep.
 
 Lista custom trusted CAs.
 
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
 **Response:**
 ```json
 {
@@ -628,6 +663,8 @@ Ta bort trusted CA.
 
 Ladda ner CA-certifikat som PEM.
 
+**Headers:** `Authorization: Bearer <token>` (krävs)
+
 ---
 
 ## Security
@@ -635,6 +672,8 @@ Ladda ner CA-certifikat som PEM.
 ### GET /api/security/issues
 
 Lista säkerhetsproblem.
+
+**Headers:** `Authorization: Bearer <token>` (krävs)
 
 **Response:**
 ```json

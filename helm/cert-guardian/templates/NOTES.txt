@@ -24,6 +24,11 @@ Prometheus metrics available at:
 {{- end }}
 {{- end }}
 
+CORS: Set config.server.corsOrigins to your frontend URL in production.
+  Default: ["*"] (allows all origins)
+
+All data API endpoints require authentication (JWT token).
+
 API documentation:
   kubectl port-forward svc/{{ include "cert-guardian.fullname" . }}-backend 8000:8000 -n {{ .Release.Namespace }}
   Then open: http://localhost:8000/docs

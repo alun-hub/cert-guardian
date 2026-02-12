@@ -8,7 +8,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Real-time Statistics** - Total certificates, expiring 7/30/90 dagar, self-signed, untrusted
 - **Expiry Timeline Chart** - Visualize when certificates expire over time
 - **Urgent Alerts** - Quick view of certificates expiring soon
-- **One-Click Scanning** - Trigger manual scans from the UI (editor+)
+- **One-Click Scanning** - Trigger manual scans from the UI (editor+, med bekräftelsedialog)
 - **TLS hygiene** - Indikatorer för weak keys, legacy TLS, senaste certförändring
 
 ### Certificates View
@@ -27,7 +27,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Criticality Levels** - Mark endpoints as low/medium/high/critical
 - **Owner Assignment** - Track responsibility for each endpoint
 - **Recent Scan Trend** - Mini-graf med senaste scanningsstatus
-- **Per-Endpoint Webhooks** - Configure specific Mattermost webhook per endpoint
+- **Per-Endpoint Webhooks** - Configure specific Mattermost webhook per endpoint (URL maskeras i listan, full URL synlig för ägare/admin)
 - **Search & Filter** - Search by host/owner, filter by criticality, expiry, webhook status
 - **Sortable Columns** - Sort by any column
 - **Ägarskap** - Endpoints kan endast ändras/raderas av skaparen eller admin
@@ -204,16 +204,17 @@ Full API reference available at:
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | /api/dashboard/stats | Any | Dashboard statistics |
-| GET | /api/certificates | Any | List certificates |
-| GET | /api/endpoints | Any | List endpoints |
+| GET | /api/dashboard/stats | Any auth | Dashboard statistics |
+| GET | /api/certificates | Any auth | List certificates |
+| GET | /api/endpoints | Any auth | List endpoints (webhook URLs masked) |
 | POST | /api/endpoints | Editor+ | Create endpoint |
 | POST | /api/scan | Editor+ | Trigger scan |
 | POST | /api/sweeps | Editor+ | Start network sweep |
 | POST | /api/sweeps/{id}/restart | Editor+ | Restart sweep |
 | GET | /api/users | Admin | List users |
 | GET | /api/audit-logs | Admin | View audit logs |
-| GET | /api/settings/scanner | Any | Read scanner settings |
+| GET | /api/endpoints/{id}/webhook | Editor (owner/admin) | Get full webhook URL |
+| GET | /api/settings/scanner | Any auth | Read scanner settings |
 | PUT | /api/settings/scanner | Admin | Update scan interval |
 | GET | /api/settings/db-health | Admin | DB health stats |
 | GET | /api/settings/siem | Admin | Read SIEM settings |
@@ -239,6 +240,10 @@ mattermost:
 scanner:
   interval_seconds: 3600
   timeout_seconds: 10
+
+server:
+  cors_origins:
+    - "*"  # Set to your frontend URL in production
 
 siem:
   mode: "disabled"  # disabled | stdout | syslog | beats
@@ -408,16 +413,12 @@ Without certificates, the frontend serves HTTP only (default behavior).
 Use nginx, Traefik, or a cloud load balancer for TLS termination:
 
 ### CORS
-Update backend for production:
+Configure allowed origins in `config/config.yaml` (defaults to `["*"]` for development):
 
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://your-domain.com"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+```yaml
+server:
+  cors_origins:
+    - "https://your-domain.com"  # Set to your frontend URL in production
 ```
 
 ### Audit Logging

@@ -331,6 +331,16 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 
 Utan certifikat fungerar allt som vanligt via HTTP på port 3000.
 
+### CORS-konfiguration (produktion)
+
+CORS-origins konfigureras i `config/config.yaml`. Default `["*"]` tillåter alla origins (lämpligt för utveckling):
+
+```yaml
+server:
+  cors_origins:
+    - "https://certs.example.com"  # Din frontend-URL i produktion
+```
+
 ### SIEM-forwarding (valfritt)
 
 Konfigurera i `config/config.yaml` eller via Settings (admin):
@@ -417,7 +427,7 @@ curl https://keycloak.example.com/realms/myrealm/protocol/openid-connect/certs
 
 ### Frontend kan inte nå backend
 
-1. Kolla CORS i api.py
+1. Kolla `server.cors_origins` i config.yaml (default `["*"]` för utveckling)
 2. Verifiera backend: `curl http://localhost:8000/health`
 3. Kolla network: `podman network ls`
 
@@ -515,11 +525,11 @@ oc rollout restart deployment/cert-guardian
 ## Monitoring
 
 ```bash
-# Health endpoint
+# Health endpoint (ingen auth)
 curl http://localhost:8000/health
 
-# Dashboard stats
-curl http://localhost:8000/api/dashboard/stats
+# Dashboard stats (kräver auth)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/dashboard/stats
 
 # Container status
 podman ps --filter name=cert-guardian
