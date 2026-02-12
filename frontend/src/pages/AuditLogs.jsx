@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { format } from 'date-fns'
 import api from '../services/api'
 
 export default function AuditLogs() {
@@ -88,7 +89,7 @@ export default function AuditLogs() {
               <tbody className="divide-y">
                 {logs.map((log) => (
                   <tr key={log.id}>
-                    <td className="py-2 pr-4 text-gray-700">{log.created_at}</td>
+                    <td className="py-2 pr-4 text-gray-700 whitespace-nowrap">{format(new Date(log.created_at), 'yyyy-MM-dd HH:mm:ss')}</td>
                     <td className="py-2 pr-4 text-gray-700">{log.user_email}</td>
                     <td className="py-2 pr-4 text-gray-700">{log.action}</td>
                     <td className="py-2 pr-4 text-gray-500">{log.details || '-'}</td>

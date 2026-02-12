@@ -149,40 +149,49 @@ class CertificateGuardian:
             self.db.add_scan(0, endpoint_id, 'failed', 'Failed to retrieve certificate')
     
     def _check_and_notify(self, cert_id: int, endpoint: dict, days_until_expiry: float):
-        """Check if notification should be sent"""
+        """Check if notification should be sent.
+
+        Sends at most ONE notification per scan — for the lowest matching
+        threshold that hasn't already been sent (ever).
+        """
         if not self.notifier:
             return
-        
+
         notification_thresholds = self.config['notifications']['warning_days']
-        
-        for threshold in notification_thresholds:
-            # Check if we're within this threshold
-            if days_until_expiry <= threshold:
-                # Check if we already sent notification for this threshold
-                if not self.db.was_notification_sent(cert_id, endpoint['id'], threshold, hours_ago=24):
-                    # Get full cert info for notification
-                    cert_data = self._get_certificate_data(cert_id)
-                    
-                    # Determine notification type
-                    if days_until_expiry <= 1:
-                        notif_type = 'emergency'
-                    elif days_until_expiry <= 7:
-                        notif_type = 'critical'
-                    elif days_until_expiry <= 30:
-                        notif_type = 'warning'
-                    else:
-                        notif_type = 'info'
-                    
-                    # Send notification
-                    success = self.notifier.send_expiry_alert(
-                        cert_data, endpoint, days_until_expiry
-                    )
-                    
-                    if success:
-                        # Record that we sent notification
-                        self.db.add_notification(
-                            cert_id, endpoint['id'], threshold, notif_type
-                        )
+
+        # Find all thresholds this cert qualifies for
+        matching = [t for t in notification_thresholds if days_until_expiry <= t]
+        if not matching:
+            return
+
+        # Pick lowest matching threshold (most urgent)
+        target = min(matching)
+
+        # One alert per threshold — no time window
+        if self.db.was_notification_sent(cert_id, endpoint['id'], target):
+            return
+
+        cert_data = self._get_certificate_data(cert_id)
+
+        if days_until_expiry <= 1:
+            notif_type = 'emergency'
+        elif days_until_expiry <= 7:
+            notif_type = 'critical'
+        elif days_until_expiry <= 30:
+            notif_type = 'warning'
+        else:
+            notif_type = 'info'
+
+        # Use per-endpoint webhook if configured, otherwise global
+        success = self.notifier.send_expiry_alert(
+            cert_data, endpoint, days_until_expiry,
+            webhook_url=endpoint.get('webhook_url')
+        )
+
+        if success:
+            self.db.add_notification(
+                cert_id, endpoint['id'], target, notif_type
+            )
     
     def _get_certificate_data(self, cert_id: int) -> dict:
         """Get certificate data from database"""
@@ -207,20 +216,20 @@ class CertificateGuardian:
         """Send security alert for a single certificate with trust issues"""
         if not self.notifier:
             return
-        
-        # Check if we already sent security alert for this cert recently
-        if self.db.was_notification_sent(cert_id, endpoint['id'], 999, hours_ago=168):  # 7 days
+
+        # One security alert per cert/endpoint — no time window
+        if self.db.was_notification_sent(cert_id, endpoint['id'], 999):
             return
-        
-        # Get full cert data
+
         cert_data = self._get_certificate_data(cert_id)
-        
-        # Send alert (days_until_expiry doesn't matter for security alerts)
+
         days = self.scanner.get_days_until_expiry(cert_info.not_after)
-        success = self.notifier.send_expiry_alert(cert_data, endpoint, days)
-        
+        success = self.notifier.send_expiry_alert(
+            cert_data, endpoint, days,
+            webhook_url=endpoint.get('webhook_url')
+        )
+
         if success:
-            # Record that we sent security notification (use 999 as special marker)
             self.db.add_notification(cert_id, endpoint['id'], 999, 'security')
     
     def send_security_summary(self):

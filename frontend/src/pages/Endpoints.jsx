@@ -85,8 +85,9 @@ export default function Endpoints() {
         if (!matchesSearch) return false
       }
       if (filters.criticality && ep.criticality !== filters.criticality) return false
-      if (filters.hasWebhook === true && !ep.webhook_url) return false
-      if (filters.hasWebhook === false && ep.webhook_url) return false
+      const hasWh = !!(ep.webhook_url || ep.webhook_url_masked)
+      if (filters.hasWebhook === true && !hasWh) return false
+      if (filters.hasWebhook === false && hasWh) return false
       if (filters.expiringDays) {
         const daysLeft = ep.last_scan ? Math.floor(ep.last_scan.days_until_expiry) : null
         if (daysLeft === null || daysLeft > filters.expiringDays) return false
@@ -114,8 +115,8 @@ export default function Endpoints() {
           bVal = order[b.criticality] ?? 4
           break
         case 'webhook':
-          aVal = a.webhook_url ? 0 : 1
-          bVal = b.webhook_url ? 0 : 1
+          aVal = (a.webhook_url || a.webhook_url_masked) ? 0 : 1
+          bVal = (b.webhook_url || b.webhook_url_masked) ? 0 : 1
           break
         case 'expires':
           aVal = a.last_scan?.days_until_expiry ?? 9999
@@ -322,8 +323,13 @@ export default function Endpoints() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {endpoint.webhook_url ? (
-                        <Bell className="w-4 h-4 text-green-500" />
+                      {(endpoint.webhook_url || endpoint.webhook_url_masked) ? (
+                        <div className="flex items-center gap-1.5">
+                          <Bell className="w-4 h-4 text-green-500 flex-shrink-0" />
+                          <span className="text-xs text-gray-500 font-mono truncate max-w-[140px]" title={endpoint.webhook_url_masked || ''}>
+                            {endpoint.webhook_url_masked}
+                          </span>
+                        </div>
                       ) : (
                         <span className="text-gray-300">-</span>
                       )}
@@ -595,6 +601,23 @@ function EditEndpointModal({ endpoint, onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false)
   const [testingWebhook, setTestingWebhook] = useState(false)
   const [webhookResult, setWebhookResult] = useState(null)
+  const [loadingWebhook, setLoadingWebhook] = useState(false)
+
+  // Fetch full webhook URL if we only have the masked version
+  useEffect(() => {
+    if (!endpoint.webhook_url && endpoint.webhook_url_masked) {
+      setLoadingWebhook(true)
+      endpointService.getWebhookUrl(endpoint.id)
+        .then((res) => {
+          const url = res.data.webhook_url || ''
+          setFormData((prev) => ({ ...prev, webhook_url: url }))
+        })
+        .catch(() => {
+          // User may not have permission — leave field empty
+        })
+        .finally(() => setLoadingWebhook(false))
+    }
+  }, [endpoint.id, endpoint.webhook_url, endpoint.webhook_url_masked])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -676,17 +699,18 @@ function EditEndpointModal({ endpoint, onClose, onSuccess }) {
               <input
                 type="url"
                 value={formData.webhook_url}
+                disabled={loadingWebhook}
                 onChange={(e) => {
                   setFormData({ ...formData, webhook_url: e.target.value })
                   setWebhookResult(null)
                 }}
-                placeholder="https://mattermost.example.com/hooks/..."
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder={loadingWebhook ? 'Loading...' : 'https://mattermost.example.com/hooks/...'}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
               />
               <button
                 type="button"
                 onClick={handleTestWebhook}
-                disabled={!formData.webhook_url || testingWebhook}
+                disabled={!formData.webhook_url || testingWebhook || loadingWebhook}
                 className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
               >
                 {testingWebhook ? 'Testing...' : 'Test'}
@@ -720,7 +744,7 @@ function EditEndpointModal({ endpoint, onClose, onSuccess }) {
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || loadingWebhook}
               className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
               {submitting ? 'Saving...' : 'Save'}

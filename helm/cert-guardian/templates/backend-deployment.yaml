@@ -33,7 +33,6 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /app/config
-              readOnly: true
             - name: data
               mountPath: /app/data
           livenessProbe:

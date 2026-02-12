@@ -17,8 +17,9 @@ class MattermostNotifier:
         self.username = username
         self.icon_emoji = icon_emoji
     
-    def send_expiry_alert(self, cert_info: Dict, endpoint: Dict, 
-                         days_until_expiry: float) -> bool:
+    def send_expiry_alert(self, cert_info: Dict, endpoint: Dict,
+                         days_until_expiry: float,
+                         webhook_url: str = None) -> bool:
         """
         Send certificate expiry alert to Mattermost
         
@@ -182,20 +183,21 @@ class MattermostNotifier:
             "text": "\n".join(message_lines)
         }
         
+        target_url = webhook_url or self.webhook_url
         try:
             response = requests.post(
-                self.webhook_url,
+                target_url,
                 json=payload,
                 timeout=10
             )
-            
+
             if response.status_code == 200:
                 logger.info(f"Sent {level} notification for {endpoint['host']}:{endpoint['port']}")
                 return True
             else:
                 logger.error(f"Failed to send notification: {response.status_code} - {response.text}")
                 return False
-                
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Error sending notification to Mattermost: {e}")
             return False

@@ -53,6 +53,7 @@ export default function Dashboard() {
   }, [])
 
   const handleScanAll = async () => {
+    if (!confirm('This will scan all endpoints. Are you sure?')) return
     try {
       setScanning(true)
       await scanService.triggerScan()

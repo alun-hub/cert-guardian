@@ -35,3 +35,7 @@ data:
 
     siem:
       mode: {{ .Values.config.siem.mode | quote }}
+      host: {{ .Values.config.siem.host | default "" | quote }}
+      port: {{ .Values.config.siem.port | default 0 }}
+      tls_enabled: {{ .Values.config.siem.tlsEnabled | default true }}
+      tls_verify: {{ .Values.config.siem.tlsVerify | default true }}

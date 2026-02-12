@@ -385,19 +385,33 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
     
     def was_notification_sent(self, certificate_id: int, endpoint_id: int,
-                             days_until_expiry: int, hours_ago: int = 24) -> bool:
-        """Check if notification was already sent recently"""
+                             days_until_expiry: int, hours_ago: int = None) -> bool:
+        """Check if notification was already sent.
+
+        Args:
+            hours_ago: If None, check all time (no time window).
+                       If set, only check within the last N hours.
+        """
         cursor = self.conn.cursor()
-        
-        cursor.execute("""
-            SELECT COUNT(*) as count
-            FROM notifications
-            WHERE certificate_id = ?
-            AND endpoint_id = ?
-            AND days_until_expiry = ?
-            AND julianday('now') - julianday(sent_at) < ?
-        """, (certificate_id, endpoint_id, days_until_expiry, hours_ago / 24.0))
-        
+
+        if hours_ago is not None:
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM notifications
+                WHERE certificate_id = ?
+                AND endpoint_id = ?
+                AND days_until_expiry = ?
+                AND julianday('now') - julianday(sent_at) < ?
+            """, (certificate_id, endpoint_id, days_until_expiry, hours_ago / 24.0))
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM notifications
+                WHERE certificate_id = ?
+                AND endpoint_id = ?
+                AND days_until_expiry = ?
+            """, (certificate_id, endpoint_id, days_until_expiry))
+
         result = cursor.fetchone()
         return result['count'] > 0
     

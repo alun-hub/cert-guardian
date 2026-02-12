@@ -117,6 +117,7 @@ export const endpointService = {
   create: (data) => api.post('/endpoints', data),
   update: (id, data) => api.put(`/endpoints/${id}`, data),
   delete: (id) => api.delete(`/endpoints/${id}`),
+  getWebhookUrl: (id) => api.get(`/endpoints/${id}/webhook`),
 }
 
 export const scanService = {

@@ -36,6 +36,10 @@ config:
       refreshTokenExpireDays: 30
   siem:
     mode: "disabled"
+    host: ""
+    port: 0
+    tlsEnabled: true
+    tlsVerify: true
 
 # Persistent storage for SQLite database
 persistence:

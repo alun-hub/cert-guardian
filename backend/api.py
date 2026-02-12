@@ -8,6 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 import sys
 import logging
 from pathlib import Path
@@ -307,6 +308,27 @@ def get_client_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def mask_webhook_url(url: Optional[str]) -> Optional[str]:
+    """Mask a webhook URL for safe display.
+
+    Example: 'https://mattermost.example.com/hooks/abc123xyz' -> 'https://matte...23xyz'
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        path = parsed.path or ""
+        # Show first 5 chars of host and last 3 chars of path
+        host_prefix = host[:5]
+        path_suffix = path[-3:] if len(path) > 3 else path
+        return f"{parsed.scheme}://{host_prefix}...{path_suffix}"
+    except Exception:
+        if len(url) <= 10:
+            return "***"
+        return f"{url[:8]}...{url[-3:]}"
 
 
 def audit_log(user_email: str, action: str, resource_type: str = None,
@@ -1148,10 +1170,16 @@ async def get_certificate(cert_id: int):
 
 # Get all endpoints
 @app.get("/api/endpoints")
-async def get_endpoints():
+async def get_endpoints(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """Get all monitored endpoints"""
+    # Optional auth — used to decide if webhook URLs should be unmasked
+    current_user = await get_current_user(request, credentials)
+
     endpoints = db.get_all_endpoints()
-    
+
     # Add last scan info for each endpoint
     cursor = db.conn.cursor()
     for endpoint in endpoints:
@@ -1164,7 +1192,7 @@ async def get_endpoints():
             ORDER BY cs.scanned_at DESC
             LIMIT 1
         """, (endpoint['id'],))
-        
+
         last_scan = cursor.fetchone()
         if last_scan:
             endpoint['last_scan'] = dict(last_scan)
@@ -1179,8 +1207,46 @@ async def get_endpoints():
             LIMIT 12
         """, (endpoint['id'],))
         endpoint['recent_scans'] = [dict(scan) for scan in cursor.fetchall()]
-    
+
+        # Mask webhook URL — only owner or admin sees full URL
+        endpoint['webhook_url_masked'] = mask_webhook_url(endpoint.get('webhook_url'))
+        is_owner = (
+            current_user
+            and endpoint.get('created_by')
+            and endpoint['created_by'] == current_user.email
+        )
+        is_admin_user = current_user and current_user.has_role("admin")
+        if not (is_owner or is_admin_user):
+            endpoint['webhook_url'] = None
+
     return {"endpoints": endpoints}
+
+
+# Get full webhook URL for an endpoint (owner/admin only)
+@app.get("/api/endpoints/{endpoint_id}/webhook")
+async def get_endpoint_webhook(
+    endpoint_id: int,
+    user: User = Depends(require_editor)
+):
+    """Get the full (unmasked) webhook URL for an endpoint.
+
+    Requires editor role and ownership or admin.
+    """
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
+    endpoint = cursor.fetchone()
+    if not endpoint:
+        raise HTTPException(status_code=404, detail="Endpoint not found")
+
+    endpoint_dict = dict(endpoint)
+    is_owner = (
+        endpoint_dict.get('created_by')
+        and endpoint_dict['created_by'] == user.email
+    )
+    if not (is_owner or user.has_role("admin")):
+        raise HTTPException(status_code=403, detail="Only the owner or an admin can view the webhook URL")
+
+    return {"webhook_url": endpoint_dict.get('webhook_url')}
 
 
 # Create endpoint
