@@ -34,6 +34,15 @@ CONFIG_PATH = Path(__file__).parent.parent / "config" / "config.yaml"
 
 logger = logging.getLogger(__name__)
 
+# Pre-load CORS origins from config before app creation
+_cors_origins = ["*"]
+try:
+    with open(CONFIG_PATH) as _f:
+        _boot_config = yaml.safe_load(_f)
+        _cors_origins = _boot_config.get("server", {}).get("cors_origins", ["*"])
+except Exception:
+    pass  # Will use default ["*"] if config is missing
+
 app = FastAPI(
     title="Certificate Guardian API",
     description="API for monitoring TLS certificate expiry",
@@ -42,10 +51,10 @@ app = FastAPI(
 
 security = HTTPBearer(auto_error=False)
 
-# CORS middleware
+# CORS — reads server.cors_origins from config.yaml, defaults to ["*"] for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -698,7 +707,7 @@ async def health_check():
 
 # Dashboard statistics
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
-async def get_dashboard_stats():
+async def get_dashboard_stats(user: User = Depends(require_auth)):
     """Get dashboard statistics"""
     cursor = db.conn.cursor()
     
@@ -832,6 +841,7 @@ async def get_certificates(
     self_signed: Optional[bool] = None,
     untrusted: Optional[bool] = None,
     limit: int = 100,
+    user: User = Depends(require_auth),
     offset: int = 0
 ):
     """Get certificates with optional filters"""
@@ -1117,7 +1127,7 @@ async def test_siem_settings(
 
 # Get single certificate details
 @app.get("/api/certificates/{cert_id}")
-async def get_certificate(cert_id: int):
+async def get_certificate(cert_id: int, user: User = Depends(require_auth)):
     """Get detailed certificate information"""
     cursor = db.conn.cursor()
     
@@ -1171,12 +1181,9 @@ async def get_certificate(cert_id: int):
 # Get all endpoints
 @app.get("/api/endpoints")
 async def get_endpoints(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    current_user: User = Depends(require_auth),
 ):
     """Get all monitored endpoints"""
-    # Optional auth — used to decide if webhook URLs should be unmasked
-    current_user = await get_current_user(request, credentials)
 
     endpoints = db.get_all_endpoints()
 
@@ -1524,7 +1531,7 @@ async def trigger_scan(
 
 # Get expiry timeline
 @app.get("/api/timeline")
-async def get_expiry_timeline(months: int = 12):
+async def get_expiry_timeline(months: int = 12, user: User = Depends(require_auth)):
     """Get certificate expiry timeline"""
     cursor = db.conn.cursor()
 
@@ -1563,7 +1570,7 @@ async def get_expiry_timeline(months: int = 12):
 
 # Get security issues
 @app.get("/api/security/issues")
-async def get_security_issues():
+async def get_security_issues(user: User = Depends(require_auth)):
     """Get all security issues (self-signed, untrusted)"""
     untrusted = db.get_untrusted_certificates()
     
@@ -1632,7 +1639,7 @@ async def test_webhook(
 # ===== Trusted CA Management =====
 
 @app.get("/api/trusted-cas")
-async def get_trusted_cas():
+async def get_trusted_cas(user: User = Depends(require_auth)):
     """Get all trusted CA certificates"""
     cas = db.get_all_trusted_cas()
     return {"trusted_cas": cas, "total": len(cas)}
@@ -1786,7 +1793,7 @@ async def delete_trusted_ca(
 
 
 @app.get("/api/trusted-cas/{ca_id}/pem")
-async def get_trusted_ca_pem(ca_id: int):
+async def get_trusted_ca_pem(ca_id: int, user: User = Depends(require_auth)):
     """Get PEM data for a trusted CA"""
     pem = db.get_trusted_ca_pem(ca_id)
     if pem:
@@ -1811,7 +1818,7 @@ class SweepValidation(BaseModel):
 
 
 @app.post("/api/sweeps/validate")
-async def validate_sweep_target(request: SweepValidation):
+async def validate_sweep_target(request: SweepValidation, user: User = Depends(require_auth)):
     """Validate a sweep target (CIDR or IP range)"""
     from network_scanner import validate_target
 
@@ -2014,14 +2021,14 @@ async def execute_sweep(sweep_id: int):
 
 
 @app.get("/api/sweeps")
-async def get_sweeps():
+async def get_sweeps(user: User = Depends(require_auth)):
     """Get all sweeps"""
     sweeps = db.get_all_sweeps()
     return {"sweeps": sweeps, "total": len(sweeps)}
 
 
 @app.get("/api/sweeps/{sweep_id}")
-async def get_sweep(sweep_id: int):
+async def get_sweep(sweep_id: int, user: User = Depends(require_auth)):
     """Get sweep details including results"""
     sweep = db.get_sweep(sweep_id)
     if not sweep:

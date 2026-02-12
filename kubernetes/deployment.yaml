@@ -38,6 +38,10 @@ data:
         access_token_expire_minutes: 15
         refresh_token_expire_days: 30
 
+    server:
+      cors_origins:
+        - "https://certguardian.example.com"  # Change to your frontend URL
+
     siem:
       mode: "disabled"
       host: ""

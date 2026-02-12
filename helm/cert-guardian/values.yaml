@@ -34,6 +34,9 @@ config:
     local:
       accessTokenExpireMinutes: 15
       refreshTokenExpireDays: 30
+  server:
+    corsOrigins:
+      - "*"  # Set to your frontend URL in production, e.g. ["https://certs.example.com"]
   siem:
     mode: "disabled"
     host: ""
