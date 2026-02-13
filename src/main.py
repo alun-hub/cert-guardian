@@ -146,37 +146,42 @@ class CertificateGuardian:
             
             # Check if we need to notify about expiry
             days_until_expiry = self.scanner.get_days_until_expiry(cert_info.not_after)
-            self._check_and_notify(cert_id, endpoint, days_until_expiry)
-            
-            # Also send immediate alert if cert has trust issues
-            if cert_info.is_self_signed or not cert_info.is_trusted_ca:
+            threshold_matched = self._check_and_notify(cert_id, endpoint, days_until_expiry)
+
+            # Send standalone security alert only when no expiry threshold
+            # matched — the expiry alert already includes security warnings.
+            if not threshold_matched and (cert_info.is_self_signed or not cert_info.is_trusted_ca):
                 self._send_security_alert_for_cert(cert_id, endpoint, cert_info)
         else:
             # Record failed scan
             self.db.add_scan(0, endpoint_id, 'failed', 'Failed to retrieve certificate')
     
-    def _check_and_notify(self, cert_id: int, endpoint: dict, days_until_expiry: float):
+    def _check_and_notify(self, cert_id: int, endpoint: dict, days_until_expiry: float) -> bool:
         """Check if notification should be sent.
 
         Sends at most ONE notification per scan — for the lowest matching
         threshold that hasn't already been sent (ever).
+
+        Returns True if a threshold matched (regardless of whether a new
+        notification was actually sent), so callers can skip redundant
+        security alerts.
         """
         if not self.notifier:
-            return
+            return False
 
         notification_thresholds = self.config['notifications']['warning_days']
 
         # Find all thresholds this cert qualifies for
         matching = [t for t in notification_thresholds if days_until_expiry <= t]
         if not matching:
-            return
+            return False
 
         # Pick lowest matching threshold (most urgent)
         target = min(matching)
 
         # One alert per threshold — no time window
         if self.db.was_notification_sent(cert_id, endpoint['id'], target):
-            return
+            return True
 
         cert_data = self._get_certificate_data(cert_id)
 
@@ -199,6 +204,7 @@ class CertificateGuardian:
             self.db.add_notification(
                 cert_id, endpoint['id'], target, notif_type
             )
+        return True
     
     def _get_certificate_data(self, cert_id: int) -> dict:
         """Get certificate data from database"""
