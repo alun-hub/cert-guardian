@@ -813,7 +813,10 @@ class Database:
         """
         cursor = self.conn.cursor()
 
-        # Find certificates that are NOT the latest scan result for any endpoint
+        # Find certificates that are NOT the latest *successful* scan result
+        # for any endpoint.  The inner MAX must also filter on status='success'
+        # so that a single failed scan doesn't cause the previous good cert to
+        # be treated as orphaned and deleted.
         cursor.execute("""
             DELETE FROM certificate_scans WHERE certificate_id IN (
                 SELECT c.id FROM certificates c
@@ -825,6 +828,7 @@ class Database:
                         SELECT MAX(cs2.scanned_at)
                         FROM certificate_scans cs2
                         WHERE cs2.endpoint_id = cs.endpoint_id
+                        AND cs2.status = 'success'
                     )
                 )
             )
@@ -838,6 +842,7 @@ class Database:
                     SELECT MAX(cs2.scanned_at)
                     FROM certificate_scans cs2
                     WHERE cs2.endpoint_id = cs.endpoint_id
+                    AND cs2.status = 'success'
                 )
             )
         """)
