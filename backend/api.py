@@ -923,7 +923,9 @@ async def get_certificates(
                 except Exception:
                     pass
 
-        # Get endpoints where the LATEST scan returned this certificate
+        # Get endpoints where the LATEST SUCCESSFUL scan returned this
+        # certificate.  Must filter on status='success' inside the MAX
+        # subquery too — otherwise a failed scan hides the cert.
         cursor.execute("""
             SELECT e.id, e.host, e.port, e.owner, e.criticality
             FROM endpoints e
@@ -934,6 +936,7 @@ async def get_certificates(
                 SELECT MAX(scanned_at)
                 FROM certificate_scans
                 WHERE endpoint_id = e.id
+                AND status = 'success'
             )
         """, (cert_dict['id'],))
         
@@ -1226,15 +1229,31 @@ async def get_endpoints(
     # Add last scan info for each endpoint
     cursor = db.conn.cursor()
     for endpoint in endpoints:
+        # Get status/time from latest scan (any status), but get cert data
+        # from the latest *successful* scan so a failed scan doesn't wipe
+        # out the days_until_expiry display or show "0 days".
         cursor.execute("""
-            SELECT cs.scanned_at, cs.status, c.not_after,
-                   julianday(c.not_after) - julianday('now') as days_until_expiry
-            FROM certificate_scans cs
-            LEFT JOIN certificates c ON cs.certificate_id = c.id
-            WHERE cs.endpoint_id = ?
-            ORDER BY cs.scanned_at DESC
-            LIMIT 1
-        """, (endpoint['id'],))
+            SELECT
+                latest.scanned_at,
+                latest.status,
+                c.not_after,
+                julianday(c.not_after) - julianday('now') AS days_until_expiry
+            FROM (
+                SELECT scanned_at, status
+                FROM certificate_scans
+                WHERE endpoint_id = ?
+                ORDER BY scanned_at DESC
+                LIMIT 1
+            ) latest
+            LEFT JOIN (
+                SELECT certificate_id
+                FROM certificate_scans
+                WHERE endpoint_id = ? AND status = 'success'
+                ORDER BY scanned_at DESC
+                LIMIT 1
+            ) last_ok ON 1=1
+            LEFT JOIN certificates c ON last_ok.certificate_id = c.id
+        """, (endpoint['id'], endpoint['id'],))
 
         last_scan = cursor.fetchone()
         if last_scan:
@@ -1689,6 +1708,7 @@ async def get_header_analysis(user: User = Depends(require_auth)):
             SELECT MAX(scanned_at)
             FROM certificate_scans
             WHERE endpoint_id = e.id
+            AND status = 'success'
         )
         AND c.header_grade IS NOT NULL
         ORDER BY c.header_score ASC
