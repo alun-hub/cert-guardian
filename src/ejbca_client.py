@@ -126,7 +126,10 @@ class EjbcaClient:
 
     def fetch_certificates(self, ca_dn_filter: str = None,
                            max_total: int = 10_000) -> List[EjbcaCertificate]:
-        """Fetch all active certificates from EJBCA with pagination.
+        """Fetch all active certificates from EJBCA.
+
+        Tries the Enterprise v2 endpoint first (paginated), then falls back
+        to the v1 endpoint (single-page, Community-compatible).
 
         Args:
             ca_dn_filter: Comma-separated CA DNs to filter by (empty = all CAs).
@@ -138,23 +141,58 @@ class EjbcaClient:
         ca_filters = [dn.strip() for dn in ca_dn_filter.split(',') if dn.strip()] \
             if ca_dn_filter else []
 
+        # Detect API version: try v2 (Enterprise) first, fall back to v1 (Community)
+        v2_url = f"{self.base_url}/v2/certificate/search"
+        v1_url = f"{self.base_url}/v1/certificate/search"
+        search_url, use_v2 = self._detect_search_endpoint(v2_url, v1_url)
+
         all_certs: List[EjbcaCertificate] = []
-        url = f"{self.base_url}/v1/search/certificates"
 
         if ca_filters:
-            # Fetch per CA DN
             for ca_dn in ca_filters:
-                all_certs.extend(self._fetch_pages(url, page_size, max_total, ca_dn))
+                all_certs.extend(
+                    self._fetch_pages(search_url, page_size, max_total, ca_dn, use_v2)
+                )
         else:
-            all_certs.extend(self._fetch_pages(url, page_size, max_total, None))
+            all_certs.extend(
+                self._fetch_pages(search_url, page_size, max_total, None, use_v2)
+            )
 
         return all_certs
 
+    def _detect_search_endpoint(self, v2_url: str, v1_url: str) -> tuple:
+        """Probe which search endpoint is available.
+
+        Returns (url, use_v2_pagination) tuple.
+        v2 (Enterprise) supports pagination via current_page (1-indexed).
+        v1 (Community/older) uses max_number_of_results only, no cursor.
+        """
+        # Probe v2 with an empty criteria list (max 0 results) to check availability
+        try:
+            probe = self.session.post(
+                v2_url,
+                json={"max_number_of_results": 1, "current_page": 1, "criteria": []},
+                timeout=self.timeout,
+            )
+            if probe.status_code not in (404, 405, 501):
+                logger.debug("Using EJBCA v2 certificate search (Enterprise/paginated)")
+                return v2_url, True
+        except Exception:
+            pass
+
+        logger.debug("Using EJBCA v1 certificate search (Community/single-page)")
+        return v1_url, False
+
     def _fetch_pages(self, url: str, page_size: int, max_total: int,
-                     ca_dn: Optional[str]) -> List[EjbcaCertificate]:
-        """Paginate through all result pages for a given (optional) CA filter."""
+                     ca_dn: Optional[str], use_v2: bool) -> List[EjbcaCertificate]:
+        """Fetch certificate pages from the given search URL.
+
+        v2 (Enterprise): current_page is 1-indexed; loop until more_results=False.
+        v1 (Community):  no pagination support — single request with max_number_of_results.
+        """
         results: List[EjbcaCertificate] = []
-        current_page = 0
+        # v2 pages are 1-indexed; v1 has no pagination
+        current_page = 1
 
         while len(results) < max_total:
             criteria = [
@@ -165,11 +203,12 @@ class EjbcaClient:
                     {"property": "ISSUER_DN", "value": ca_dn, "operation": "EQUAL"}
                 )
 
-            body = {
+            body: dict = {
                 "max_number_of_results": page_size,
-                "current_page": current_page,
                 "criteria": criteria,
             }
+            if use_v2:
+                body["current_page"] = current_page
 
             resp = self.session.post(url, json=body, timeout=60)
             resp.raise_for_status()
@@ -185,14 +224,17 @@ class EjbcaClient:
                     fp = item.get('fingerprint', '?')
                     logger.warning(f"Failed to parse EJBCA cert {fp}: {e}")
 
-            # Check for more pages
+            if not use_v2 or len(raw_certs) == 0:
+                # v1: single page only; v2: stop if empty page returned
+                break
+
+            # v2 pagination: check more_results in response or pagination_summary
             more = data.get('more_results')
             if more is None:
-                # Some EJBCA versions nest pagination info
                 summary = data.get('pagination_summary', {})
                 more = summary.get('response_more_results', False)
 
-            if not more or len(raw_certs) == 0:
+            if not more:
                 break
             current_page += 1
 

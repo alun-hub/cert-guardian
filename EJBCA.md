@@ -14,8 +14,24 @@ Certificate Guardian kan hämta certifikat direkt från en EJBCA-server via REST
 ## Förutsättningar
 
 - EJBCA med REST API aktiverat (`ejbca-rest-api`)
-- Autentisering: antingen klientcertifikat (mTLS) eller API-nyckel
-- EJBCA REST API v1 (`/v1/search/certificates` och `/v1/ca`)
+- Autentisering: klientcertifikat (mTLS) för Community och Enterprise; API-nyckel (Bearer token) **endast Enterprise**
+- EJBCA Community 8.2+ eller Enterprise (rekommenderas för full sökning och paginering)
+
+## Community vs Enterprise — API-skillnader
+
+| Funktion | Community | Enterprise |
+|----------|-----------|------------|
+| `GET /v1/ca` | ✅ (sedan 8.2) | ✅ |
+| `POST /v1/certificate/search` | ⚠️ Kan finnas, ej garanterat | ✅ |
+| `POST /v2/certificate/search` (paginerat) | ❌ | ✅ |
+| mTLS-autentisering | ✅ | ✅ |
+| API-nyckel (Bearer token) | ❌ | ✅ |
+
+**Klienten auto-detekterar** vilken endpoint som finns:
+1. Probar `/v2/certificate/search` (Enterprise) — stödjer paginering med `current_page` (1-indexerat)
+2. Faller tillbaka på `/v1/certificate/search` (Community) — en enda sida med `max_number_of_results`
+
+> **Notera:** PrimeKey förvärvades av Keyfactor 2021. EJBCA heter nu officiellt "Keyfactor EJBCA". API:et är identiskt — samma kodbas, samma endpoints.
 
 ## Konfiguration via UI
 
@@ -122,6 +138,14 @@ run_once()
 ```
 
 `sync_interval_hours: 0` inaktiverar automatisk synk — använd då **Sync now** i UI:t eller API-anropet.
+
+### API-version och endpoint-detektion
+
+Klienten probar automatiskt:
+1. **`POST /v2/certificate/search`** (Enterprise) — fullständig paginering, `current_page` 1-indexerat
+2. **`POST /v1/certificate/search`** (Community/äldre Enterprise) — enkel sida, `max_number_of_results` styr antalet
+
+För Community-installationer med många certifikat: sätt `max_results_per_page: 1000` (max som EJBCA tillåter per sida). Alla certifikat over 1000 kommer **inte** att hämtas om v2 inte finns.
 
 ### Manuell synk via API
 
@@ -286,7 +310,12 @@ Antingen:
 
 - Kontrollera att klientcertifikatet har rätt behörigheter i EJBCA
 - Verifiera att `auth_method` matchar EJBCA:s konfiguration
+- **API-nyckel fungerar bara på Enterprise** — använd mTLS för Community
 - För API-nyckel: kontrollera att nyckeln är giltig och inte utgången
+
+### Färre certifikat än förväntat (Community)
+
+Community stödjer bara `/v1/certificate/search` utan paginering. Max antal certifikat som returneras styrs av `max_results_per_page` (max 1000). Om du har fler certifikat behöver du uppgradera till Enterprise för att få full täckning, eller använda `ca_dn_filter` för att dela upp hämtningen per CA.
 
 ### Inga certifikat returneras
 
