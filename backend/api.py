@@ -22,7 +22,9 @@ from notifier import MattermostNotifier
 from auth import AuthManager, User, LocalAuthProvider
 from siem_client import SiemClient
 from ca_bundle import update_ca_bundle
-from tls_analyzer import analyze_endpoint, summarize_findings
+from tls_analyzer import analyze_endpoint, analyze_ssh, summarize_findings
+from ssh_scanner import scan_ssh
+from ldap_scanner import scan_ldap
 import yaml
 import time as _time
 import socket
@@ -1514,103 +1516,80 @@ async def trigger_scan(
 ):
     """Trigger certificate scan (editor+)"""
     
+    def _store_tls_scan(endpoint_id: int, cert_info):
+        """Store a TLS scan result in the database."""
+        cert_id = db.add_certificate(
+            fingerprint=cert_info.fingerprint,
+            subject=cert_info.subject,
+            issuer=cert_info.issuer,
+            not_before=cert_info.not_before.isoformat(),
+            not_after=cert_info.not_after.isoformat(),
+            serial_number=cert_info.serial_number,
+            san_list=cert_info.san_list,
+            key_type=cert_info.key_type,
+            key_size=cert_info.key_size,
+            signature_algorithm=cert_info.signature_algorithm,
+            hostname_matches=cert_info.hostname_matches,
+            ocsp_present=cert_info.ocsp_present,
+            crl_present=cert_info.crl_present,
+            eku_server_auth=cert_info.eku_server_auth,
+            key_usage_digital_signature=cert_info.key_usage_digital_signature,
+            key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
+            chain_has_expiring=cert_info.chain_has_expiring,
+            weak_signature=cert_info.weak_signature,
+            is_self_signed=cert_info.is_self_signed,
+            is_trusted_ca=cert_info.is_trusted_ca,
+            validation_error=cert_info.validation_error,
+            chain_length=cert_info.chain_length,
+            header_score=cert_info.header_score,
+            header_grade=cert_info.header_grade,
+            headers_present=cert_info.headers_present,
+            headers_missing=cert_info.headers_missing,
+            hsts_max_age=cert_info.hsts_max_age,
+            csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
+            header_recommendations=cert_info.header_recommendations,
+            redirects_to_https=cert_info.redirects_to_https,
+            insecure_cookies=cert_info.insecure_cookies,
+            caa_present=cert_info.caa_present,
+            caa_records=cert_info.caa_records,
+            ldap_anon_bind_allowed=cert_info.ldap_anon_bind_allowed,
+            ldap_plain_available=cert_info.ldap_plain_available,
+        )
+        db.add_scan(
+            cert_id, endpoint_id, 'success',
+            tls_version=cert_info.tls_version,
+            cipher=cert_info.cipher,
+        )
+
+    def _scan_one(endpoint: dict):
+        """Scan a single endpoint, dispatching to SSH or TLS scanner."""
+        host = endpoint['host']
+        port = endpoint['port']
+        eid = endpoint['id']
+
+        if port == 22:
+            ssh_result = scan_ssh(host, port=port)
+            db.add_ssh_scan(eid, ssh_result)
+        else:
+            cert_info = scanner.scan_endpoint(host, port)
+            if cert_info:
+                _store_tls_scan(eid, cert_info)
+            else:
+                db.add_scan(0, eid, 'failed', 'Failed to retrieve certificate')
+
     async def do_scan(endpoint_id: Optional[int] = None):
         if endpoint_id:
             # Scan specific endpoint
             cursor = db.conn.cursor()
             cursor.execute("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
             endpoint = cursor.fetchone()
-            
             if not endpoint:
                 return
-            
-            endpoint_dict = dict(endpoint)
-            cert_info = scanner.scan_endpoint(endpoint_dict['host'], endpoint_dict['port'])
-            
-            if cert_info:
-                cert_id = db.add_certificate(
-                    fingerprint=cert_info.fingerprint,
-                    subject=cert_info.subject,
-                    issuer=cert_info.issuer,
-                    not_before=cert_info.not_before.isoformat(),
-                    not_after=cert_info.not_after.isoformat(),
-                    serial_number=cert_info.serial_number,
-                    san_list=cert_info.san_list,
-                    key_type=cert_info.key_type,
-                    key_size=cert_info.key_size,
-                    signature_algorithm=cert_info.signature_algorithm,
-                    hostname_matches=cert_info.hostname_matches,
-                    ocsp_present=cert_info.ocsp_present,
-                    crl_present=cert_info.crl_present,
-                    eku_server_auth=cert_info.eku_server_auth,
-                    key_usage_digital_signature=cert_info.key_usage_digital_signature,
-                    key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
-                    chain_has_expiring=cert_info.chain_has_expiring,
-                    weak_signature=cert_info.weak_signature,
-                    is_self_signed=cert_info.is_self_signed,
-                    is_trusted_ca=cert_info.is_trusted_ca,
-                    validation_error=cert_info.validation_error,
-                    chain_length=cert_info.chain_length,
-                    header_score=cert_info.header_score,
-                    header_grade=cert_info.header_grade,
-                    headers_present=cert_info.headers_present,
-                    headers_missing=cert_info.headers_missing,
-                    hsts_max_age=cert_info.hsts_max_age,
-                    csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
-                    header_recommendations=cert_info.header_recommendations,
-                )
-                db.add_scan(
-                    cert_id, endpoint_id, 'success',
-                    tls_version=cert_info.tls_version,
-                    cipher=cert_info.cipher
-                )
+            _scan_one(dict(endpoint))
         else:
             # Scan all endpoints
-            endpoints = db.get_all_endpoints()
-            for endpoint in endpoints:
-                cert_info = scanner.scan_endpoint(endpoint['host'], endpoint['port'])
-
-                if cert_info:
-                    cert_id = db.add_certificate(
-                        fingerprint=cert_info.fingerprint,
-                        subject=cert_info.subject,
-                        issuer=cert_info.issuer,
-                        not_before=cert_info.not_before.isoformat(),
-                        not_after=cert_info.not_after.isoformat(),
-                        serial_number=cert_info.serial_number,
-                        san_list=cert_info.san_list,
-                        key_type=cert_info.key_type,
-                        key_size=cert_info.key_size,
-                        signature_algorithm=cert_info.signature_algorithm,
-                        hostname_matches=cert_info.hostname_matches,
-                        ocsp_present=cert_info.ocsp_present,
-                        crl_present=cert_info.crl_present,
-                        eku_server_auth=cert_info.eku_server_auth,
-                        key_usage_digital_signature=cert_info.key_usage_digital_signature,
-                        key_usage_key_encipherment=cert_info.key_usage_key_encipherment,
-                        chain_has_expiring=cert_info.chain_has_expiring,
-                        weak_signature=cert_info.weak_signature,
-                        is_self_signed=cert_info.is_self_signed,
-                        is_trusted_ca=cert_info.is_trusted_ca,
-                        validation_error=cert_info.validation_error,
-                        chain_length=cert_info.chain_length,
-                        header_score=cert_info.header_score,
-                        header_grade=cert_info.header_grade,
-                        headers_present=cert_info.headers_present,
-                        headers_missing=cert_info.headers_missing,
-                        hsts_max_age=cert_info.hsts_max_age,
-                        csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
-                        header_recommendations=cert_info.header_recommendations,
-                        redirects_to_https=cert_info.redirects_to_https,
-                        insecure_cookies=cert_info.insecure_cookies,
-                        caa_present=cert_info.caa_present,
-                        caa_records=cert_info.caa_records,
-                    )
-                    db.add_scan(
-                        cert_id, endpoint['id'], 'success',
-                        tls_version=cert_info.tls_version,
-                        cipher=cert_info.cipher
-                    )
+            for endpoint in db.get_all_endpoints():
+                _scan_one(endpoint)
 
         # Clean up orphaned certificates after scan
         db.cleanup_orphaned_certificates()
@@ -1740,16 +1719,32 @@ async def get_header_analysis(user: User = Depends(require_auth)):
 @app.get("/api/security/report")
 async def get_security_report(user: User = Depends(require_auth)):
     """Return a full security findings report for all monitored endpoints."""
-    rows = db.get_security_report_data()
+
+    def _serialize_findings(findings):
+        return [
+            {
+                "finding_id": f.finding_id,
+                "severity": f.severity,
+                "category": f.category,
+                "title": f.title,
+                "description": f.description,
+                "recommendation": f.recommendation,
+                "detail": f.detail,
+            }
+            for f in findings
+        ]
 
     report = []
-    for row in rows:
+
+    # TLS / HTTPS endpoints
+    for row in db.get_security_report_data():
         findings = analyze_endpoint(row)
         summary = summarize_findings(findings)
         report.append({
             "endpoint_id": row["endpoint_id"],
             "host": row["host"],
             "port": row["port"],
+            "endpoint_type": "tls",
             "owner": row.get("owner"),
             "scanned_at": row.get("scanned_at"),
             "tls_version": row.get("tls_version"),
@@ -1757,18 +1752,26 @@ async def get_security_report(user: User = Depends(require_auth)):
             "header_grade": row.get("header_grade"),
             "header_score": row.get("header_score"),
             "summary": summary,
-            "findings": [
-                {
-                    "finding_id": f.finding_id,
-                    "severity": f.severity,
-                    "category": f.category,
-                    "title": f.title,
-                    "description": f.description,
-                    "recommendation": f.recommendation,
-                    "detail": f.detail,
-                }
-                for f in findings
-            ],
+            "findings": _serialize_findings(findings),
+        })
+
+    # SSH endpoints
+    for row in db.get_ssh_report_data():
+        findings = analyze_ssh(row)
+        summary = summarize_findings(findings)
+        report.append({
+            "endpoint_id": row["endpoint_id"],
+            "host": row["host"],
+            "port": row["port"],
+            "endpoint_type": "ssh",
+            "owner": row.get("owner"),
+            "scanned_at": row.get("scanned_at"),
+            "tls_version": None,
+            "cipher": None,
+            "header_grade": None,
+            "header_score": None,
+            "summary": summary,
+            "findings": _serialize_findings(findings),
         })
 
     # Global totals across all endpoints

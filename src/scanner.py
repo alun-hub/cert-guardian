@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed4
 
 from http_scanner import HTTPHeaderScanner
 from dns_scanner import check_caa
+from ldap_scanner import scan_ldap
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,9 @@ class CertificateInfo:
     # DNS / CAA
     caa_present: Optional[bool] = None
     caa_records: Optional[List[str]] = None
+    # LDAP (port 636 endpoints)
+    ldap_anon_bind_allowed: Optional[bool] = None
+    ldap_plain_available: Optional[bool] = None
 
 
 class TLSScanner:
@@ -494,6 +498,15 @@ class TLSScanner:
                             cert_info.caa_records = caa_result.caa_records
                     except Exception as e:
                         logger.warning(f"CAA check failed for {host}: {e}")
+
+                    # LDAP anonymous bind check (for LDAPS endpoints)
+                    if port == 636:
+                        try:
+                            ldap_result = scan_ldap(host, ldaps_port=port, timeout=self.timeout)
+                            cert_info.ldap_anon_bind_allowed = ldap_result.anon_bind_allowed
+                            cert_info.ldap_plain_available = ldap_result.plain_available
+                        except Exception as e:
+                            logger.warning(f"LDAP scan failed for {host}:{port}: {e}")
 
                     status_msg = f"Successfully scanned {host}:{port} - expires {not_after}"
                     if is_self_signed:

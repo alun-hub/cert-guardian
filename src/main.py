@@ -19,6 +19,7 @@ from database import Database
 from scanner import TLSScanner
 from notifier import MattermostNotifier
 from ca_bundle import update_ca_bundle
+from ssh_scanner import scan_ssh
 
 # Setup logging
 logging.basicConfig(
@@ -99,10 +100,16 @@ class CertificateGuardian:
         host = endpoint['host']
         port = endpoint['port']
         endpoint_id = endpoint['id']
-        
-        # Scan the endpoint
+
+        # SSH endpoint: use SSH scanner instead of TLS scanner
+        if port == 22:
+            ssh_result = scan_ssh(host, port=port)
+            self.db.add_ssh_scan(endpoint_id, ssh_result)
+            return
+
+        # TLS endpoint: scan certificate + HTTP headers
         cert_info = self.scanner.scan_endpoint(host, port)
-        
+
         if cert_info:
             # Store certificate
             cert_id = self.db.add_certificate(
@@ -135,6 +142,12 @@ class CertificateGuardian:
                 hsts_max_age=cert_info.hsts_max_age,
                 csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
                 header_recommendations=cert_info.header_recommendations,
+                redirects_to_https=cert_info.redirects_to_https,
+                insecure_cookies=cert_info.insecure_cookies,
+                caa_present=cert_info.caa_present,
+                caa_records=cert_info.caa_records,
+                ldap_anon_bind_allowed=cert_info.ldap_anon_bind_allowed,
+                ldap_plain_available=cert_info.ldap_plain_available,
             )
 
             # Record successful scan
@@ -143,7 +156,7 @@ class CertificateGuardian:
                 tls_version=cert_info.tls_version,
                 cipher=cert_info.cipher
             )
-            
+
             # Check if we need to notify about expiry
             days_until_expiry = self.scanner.get_days_until_expiry(cert_info.not_after)
             threshold_matched = self._check_and_notify(cert_id, endpoint, days_until_expiry)

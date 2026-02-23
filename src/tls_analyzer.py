@@ -544,6 +544,50 @@ def analyze_endpoint(row: dict) -> List[SecurityFinding]:
             detail=f"Cookies: {names_str}  |  Saknade flaggor: {missing_str}",
         ))
 
+    # ------------------------------------------------------------------ #
+    # LDAP findings (port 636 endpoints)
+    # ------------------------------------------------------------------ #
+
+    ldap_anon = row.get("ldap_anon_bind_allowed")
+    ldap_plain = row.get("ldap_plain_available")
+
+    if ldap_anon == 1:
+        findings.append(SecurityFinding(
+            finding_id="LDAP_ANON_BIND",
+            severity="high",
+            category="ldap",
+            title="LDAP tillåter anonyma bind-förfrågningar",
+            description=(
+                "LDAP-servern accepterar anonyma bind utan autentisering. "
+                "En angripare utan inloggningsuppgifter kan bläddra i katalogen, "
+                "lista användare, grupper och andra känsliga attribut."
+            ),
+            recommendation=(
+                "Inaktivera anonymt LDAP-bind i serverns konfiguration. "
+                "I OpenLDAP: sätt 'olcDisallows: bind_anon' och 'olcRequires: authc'. "
+                "I Active Directory: kräv LDAP-signering och inaktivera anonym åtkomst via "
+                "grupprincip (Network Security: LDAP client signing requirements)."
+            ),
+        ))
+
+    if ldap_plain == 1:
+        findings.append(SecurityFinding(
+            finding_id="LDAP_PLAIN_AVAILABLE",
+            severity="medium",
+            category="ldap",
+            title="Okrypterad LDAP (port 389) är tillgänglig",
+            description=(
+                "Port 389 (vanlig LDAP utan kryptering) är öppen vid sidan om LDAPS. "
+                "Autentiseringsuppgifter och kataloginformation kan skickas i klartext "
+                "om klienter av misstag ansluter till fel port."
+            ),
+            recommendation=(
+                "Stäng port 389 i brandväggen om LDAPS (636) används. "
+                "Alternativt, kräv StartTLS på port 389 och neka okrypterade bind. "
+                "I OpenLDAP: konfigurera 'olcSecurity: tls=1' för att tvinga kryptering."
+            ),
+        ))
+
     # Sort by severity
     findings.sort(key=lambda f: SEVERITY_ORDER.get(f.severity, 99))
     return findings
@@ -556,3 +600,144 @@ def summarize_findings(findings: List[SecurityFinding]) -> dict:
         if f.severity in summary:
             summary[f.severity] += 1
     return summary
+
+
+def analyze_ssh(row: dict) -> List[SecurityFinding]:
+    """
+    Analyse one SSH endpoint's latest scan data and return SecurityFindings.
+
+    Args:
+        row: Dict with columns from ssh_scans joined with endpoints.
+    """
+    findings: List[SecurityFinding] = []
+
+    # Scan error → can't evaluate
+    if row.get("scan_error"):
+        findings.append(SecurityFinding(
+            finding_id="SSH_SCAN_ERROR",
+            severity="info",
+            category="ssh",
+            title="SSH-skanning misslyckades",
+            description="SSH-skannern kunde inte ansluta eller tolka serverns svar.",
+            recommendation="Kontrollera att porten är öppen och att servern svarar med en giltig SSH-banner.",
+            detail=row.get("scan_error"),
+        ))
+        return findings
+
+    # SSH protocol version 1
+    if row.get("supports_ssh1"):
+        findings.append(SecurityFinding(
+            finding_id="SSH_PROTOCOL_V1",
+            severity="critical",
+            category="ssh",
+            title="SSH-protokoll version 1 stöds",
+            description=(
+                "Servern stöder SSH-1, ett föråldrat protokoll med allvarliga "
+                "kryptografiska svagheter. SSHv1 är sårbart för man-in-the-middle- "
+                "attacker och sessionskapning."
+            ),
+            recommendation=(
+                "Inaktivera SSH-1 omedelbart. I OpenSSH: sätt 'Protocol 2' i sshd_config "
+                "och starta om tjänsten."
+            ),
+            detail=f"Banner: {row.get('banner', '')}",
+        ))
+
+    # Weak KEX algorithms
+    weak_kex = _parse_json_field(row.get("weak_kex"))
+    if weak_kex:
+        findings.append(SecurityFinding(
+            finding_id="SSH_WEAK_KEX",
+            severity="high",
+            category="ssh",
+            title="Svaga nyckelutbytesalgoritmer (KEX)",
+            description=(
+                "Servern erbjuder föråldrade KEX-algoritmer. "
+                "diffie-hellman-group1-sha1 bygger på 1024-bitars DH och SHA-1, "
+                "som anses kryptografiskt svaga och kan komprometteras av resursstarka angripare."
+            ),
+            recommendation=(
+                "Ta bort svaga KEX-algoritmer ur sshd_config. Rekommenderat: "
+                "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,"
+                "ecdh-sha2-nistp256,diffie-hellman-group14-sha256"
+            ),
+            detail=f"Svaga KEX: {', '.join(weak_kex)}",
+        ))
+
+    # Weak host key algorithms
+    weak_hk = _parse_json_field(row.get("weak_host_key"))
+    if weak_hk:
+        findings.append(SecurityFinding(
+            finding_id="SSH_WEAK_HOST_KEY",
+            severity="high",
+            category="ssh",
+            title="Svaga värdnyckelalgoritmer",
+            description=(
+                "Servern erbjuder föråldrade värdnyckeltyper. "
+                "ssh-dss (DSA) är formellt avvecklat (RFC 9142). "
+                "ssh-rsa använder SHA-1 och är inaktiverat som standard sedan OpenSSH 8.8."
+            ),
+            recommendation=(
+                "Generera moderna värdnycklar och konfigurera: "
+                "HostKeyAlgorithms ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256 "
+                "Ta bort gamla DSA/RSA-nycklar från /etc/ssh/."
+            ),
+            detail=f"Svaga värdnyckeltyper: {', '.join(weak_hk)}",
+        ))
+
+    # Weak encryption algorithms
+    weak_enc = _parse_json_field(row.get("weak_encryption"))
+    if weak_enc:
+        findings.append(SecurityFinding(
+            finding_id="SSH_WEAK_ENCRYPTION",
+            severity="high",
+            category="ssh",
+            title="Svaga krypteringsalgoritmer",
+            description=(
+                "Servern erbjuder svaga symmetriska krypteringsalgoritmer. "
+                "CBC-lägeschiffer (AES-CBC, 3DES-CBC) är sårbara för padding-oracle-attacker. "
+                "RC4 (arcfour) och DES är kryptografiskt brutna."
+            ),
+            recommendation=(
+                "Begränsa till moderna chiffer i sshd_config: "
+                "Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,"
+                "aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+            ),
+            detail=f"Svaga chiffer: {', '.join(weak_enc)}",
+        ))
+
+    # Weak MAC algorithms
+    weak_mac = _parse_json_field(row.get("weak_mac"))
+    if weak_mac:
+        findings.append(SecurityFinding(
+            finding_id="SSH_WEAK_MAC",
+            severity="medium",
+            category="ssh",
+            title="Svaga MAC-algoritmer",
+            description=(
+                "Servern erbjuder svaga MAC-algoritmer för meddelandeautentisering. "
+                "hmac-md5 och hmac-sha1 använder kryptografiskt brutna/svaga hashfunktioner. "
+                "umac-64 har en för kort tagglängd (64 bitar)."
+            ),
+            recommendation=(
+                "Begränsa MAC-algoritmer i sshd_config: "
+                "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,"
+                "umac-128-etm@openssh.com"
+            ),
+            detail=f"Svaga MAC: {', '.join(weak_mac)}",
+        ))
+
+    # No weaknesses found — add an informational finding
+    if not findings:
+        findings.append(SecurityFinding(
+            finding_id="SSH_OK",
+            severity="info",
+            category="ssh",
+            title="SSH-konfigurationen ser bra ut",
+            description="Inga uppenbara svagheter hittades i SSH-serverns algoritmlista.",
+            recommendation="Fortsätt regelbundet uppdatera OpenSSH och granska konfigurationen.",
+            detail=row.get("banner"),
+        ))
+
+    findings.sort(key=lambda f: SEVERITY_ORDER.get(f.severity, 99))
+    return findings

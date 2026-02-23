@@ -143,11 +143,37 @@ class Database:
             "insecure_cookies TEXT",
             "caa_present INTEGER",
             "caa_records TEXT",
+            "ldap_anon_bind_allowed INTEGER",
+            "ldap_plain_available INTEGER",
         ]:
             try:
                 cursor.execute(f"ALTER TABLE certificates ADD COLUMN {col_def}")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+
+        # SSH scan results table (SSH endpoints have no TLS certificate)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ssh_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint_id INTEGER NOT NULL,
+                scanned_at TEXT NOT NULL,
+                banner TEXT,
+                protocol_version TEXT,
+                server_software TEXT,
+                kex_algorithms TEXT,
+                server_host_key_algorithms TEXT,
+                encryption_algorithms TEXT,
+                mac_algorithms TEXT,
+                compression_algorithms TEXT,
+                supports_ssh1 INTEGER DEFAULT 0,
+                weak_kex TEXT,
+                weak_host_key TEXT,
+                weak_encryption TEXT,
+                weak_mac TEXT,
+                scan_error TEXT,
+                FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
+            )
+        """)
 
         # Migrations for scan metadata
         for col_def in [
@@ -293,7 +319,9 @@ class Database:
                        redirects_to_https: bool = None,
                        insecure_cookies: List[dict] = None,
                        caa_present: bool = None,
-                       caa_records: List[str] = None) -> int:
+                       caa_records: List[str] = None,
+                       ldap_anon_bind_allowed: bool = None,
+                       ldap_plain_available: bool = None) -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
@@ -315,9 +343,10 @@ class Database:
                 header_score, header_grade, headers_present, headers_missing,
                 hsts_max_age, csp_has_unsafe_inline, header_recommendations,
                 redirects_to_https, insecure_cookies, caa_present, caa_records,
+                ldap_anon_bind_allowed, ldap_plain_available,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 subject = excluded.subject,
                 issuer = excluded.issuer,
@@ -351,6 +380,8 @@ class Database:
                 insecure_cookies = excluded.insecure_cookies,
                 caa_present = excluded.caa_present,
                 caa_records = excluded.caa_records,
+                ldap_anon_bind_allowed = excluded.ldap_anon_bind_allowed,
+                ldap_plain_available = excluded.ldap_plain_available,
                 updated_at = excluded.updated_at
         """, (fingerprint, subject, issuer, not_before, not_after,
               serial_number, san_json, key_type, key_size, signature_algorithm,
@@ -364,6 +395,7 @@ class Database:
               hsts_max_age, _bool_or_none(csp_has_unsafe_inline), header_recommendations_json,
               _bool_or_none(redirects_to_https), insecure_cookies_json,
               _bool_or_none(caa_present), caa_records_json,
+              _bool_or_none(ldap_anon_bind_allowed), _bool_or_none(ldap_plain_available),
               now, now))
         self.conn.commit()
 
@@ -941,6 +973,8 @@ class Database:
                 c.insecure_cookies,
                 c.caa_present,
                 c.caa_records,
+                c.ldap_anon_bind_allowed,
+                c.ldap_plain_available,
                 e.id                            AS endpoint_id,
                 e.host,
                 e.port,
@@ -960,6 +994,76 @@ class Database:
                     AND cs2.endpoint_id = e.id
                     AND cs2.status = 'success'
               )
+            ORDER BY e.host, e.port
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    # ==================== SSH Scan Methods ====================
+
+    def add_ssh_scan(self, endpoint_id: int, result) -> int:
+        """Store an SSH scan result. result is an SSHScanResult dataclass."""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            INSERT INTO ssh_scans (
+                endpoint_id, scanned_at,
+                banner, protocol_version, server_software,
+                kex_algorithms, server_host_key_algorithms,
+                encryption_algorithms, mac_algorithms, compression_algorithms,
+                supports_ssh1, weak_kex, weak_host_key, weak_encryption, weak_mac,
+                scan_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            endpoint_id, now,
+            result.banner, result.protocol_version, result.server_software,
+            json.dumps(result.kex_algorithms),
+            json.dumps(result.server_host_key_algorithms),
+            json.dumps(result.encryption_algorithms),
+            json.dumps(result.mac_algorithms),
+            json.dumps(result.compression_algorithms),
+            int(result.supports_ssh1),
+            json.dumps(result.weak_kex),
+            json.dumps(result.weak_host_key),
+            json.dumps(result.weak_encryption),
+            json.dumps(result.weak_mac),
+            result.scan_error,
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_ssh_report_data(self) -> List[Dict]:
+        """Get the latest SSH scan per endpoint."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT
+                s.id            AS scan_id,
+                s.endpoint_id,
+                s.scanned_at,
+                s.banner,
+                s.protocol_version,
+                s.server_software,
+                s.kex_algorithms,
+                s.server_host_key_algorithms,
+                s.encryption_algorithms,
+                s.mac_algorithms,
+                s.compression_algorithms,
+                s.supports_ssh1,
+                s.weak_kex,
+                s.weak_host_key,
+                s.weak_encryption,
+                s.weak_mac,
+                s.scan_error,
+                e.host,
+                e.port,
+                e.owner,
+                e.criticality
+            FROM ssh_scans s
+            JOIN endpoints e ON s.endpoint_id = e.id
+            WHERE s.scanned_at = (
+                SELECT MAX(s2.scanned_at)
+                FROM ssh_scans s2
+                WHERE s2.endpoint_id = s.endpoint_id
+            )
             ORDER BY e.host, e.port
         """)
         return [dict(row) for row in cursor.fetchall()]
