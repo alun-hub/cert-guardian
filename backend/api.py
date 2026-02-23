@@ -22,6 +22,7 @@ from notifier import MattermostNotifier
 from auth import AuthManager, User, LocalAuthProvider
 from siem_client import SiemClient
 from ca_bundle import update_ca_bundle
+from tls_analyzer import analyze_endpoint, summarize_findings
 import yaml
 import time as _time
 import socket
@@ -1729,6 +1730,54 @@ async def get_header_analysis(user: User = Depends(require_auth)):
         results.append(entry)
 
     return {"headers": results, "total": len(results)}
+
+
+# Security report — full findings per endpoint
+@app.get("/api/security/report")
+async def get_security_report(user: User = Depends(require_auth)):
+    """Return a full security findings report for all monitored endpoints."""
+    rows = db.get_security_report_data()
+
+    report = []
+    for row in rows:
+        findings = analyze_endpoint(row)
+        summary = summarize_findings(findings)
+        report.append({
+            "endpoint_id": row["endpoint_id"],
+            "host": row["host"],
+            "port": row["port"],
+            "owner": row.get("owner"),
+            "scanned_at": row.get("scanned_at"),
+            "tls_version": row.get("tls_version"),
+            "cipher": row.get("cipher"),
+            "header_grade": row.get("header_grade"),
+            "header_score": row.get("header_score"),
+            "summary": summary,
+            "findings": [
+                {
+                    "finding_id": f.finding_id,
+                    "severity": f.severity,
+                    "category": f.category,
+                    "title": f.title,
+                    "description": f.description,
+                    "recommendation": f.recommendation,
+                    "detail": f.detail,
+                }
+                for f in findings
+            ],
+        })
+
+    # Global totals across all endpoints
+    total_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for entry in report:
+        for sev, count in entry["summary"].items():
+            total_summary[sev] += count
+
+    return {
+        "report": report,
+        "total_endpoints": len(report),
+        "total_summary": total_summary,
+    }
 
 
 # Send test notification

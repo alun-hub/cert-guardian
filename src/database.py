@@ -886,6 +886,63 @@ class Database:
         cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_security_report_data(self) -> List[Dict]:
+        """Get latest successful scan data per endpoint, joined with cert and scan details.
+
+        Returns one row per (endpoint, certificate) pair where the scan is the
+        most recent successful one for that endpoint.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT
+                c.id                            AS cert_id,
+                c.fingerprint,
+                c.subject,
+                c.issuer,
+                c.not_before,
+                c.not_after,
+                c.key_type,
+                c.key_size,
+                c.signature_algorithm,
+                c.weak_signature,
+                c.is_self_signed,
+                c.is_trusted_ca,
+                c.validation_error,
+                c.chain_length,
+                c.hostname_matches,
+                c.ocsp_present,
+                c.crl_present,
+                c.eku_server_auth,
+                c.header_score,
+                c.header_grade,
+                c.headers_present,
+                c.headers_missing,
+                c.hsts_max_age,
+                c.csp_has_unsafe_inline,
+                c.header_recommendations,
+                e.id                            AS endpoint_id,
+                e.host,
+                e.port,
+                e.owner,
+                e.criticality,
+                cs.tls_version,
+                cs.cipher,
+                cs.scanned_at
+            FROM certificates c
+            JOIN certificate_scans cs ON c.id = cs.certificate_id
+            JOIN endpoints e ON cs.endpoint_id = e.id
+            WHERE cs.status = 'success'
+              AND cs.scanned_at = (
+                  SELECT MAX(cs2.scanned_at)
+                  FROM certificate_scans cs2
+                  WHERE cs2.certificate_id = c.id
+                    AND cs2.endpoint_id = e.id
+                    AND cs2.status = 'success'
+              )
+            ORDER BY e.host, e.port
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
     def close(self):
         """Close database connection"""
         if self.conn:
