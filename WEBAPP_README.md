@@ -59,6 +59,12 @@ Full-featured web application for monitoring TLS certificate expiry, SSH securit
 - **Scanner Interval** - Ändra scan-intervall i UI (admin)
 - **Database Health** - Storlek, tabellräkningar och scan-volym (admin)
 - **SIEM Forwarding** - Stdout/Syslog/Beats med TLS + test-event (admin)
+- **EJBCA/PrimeKey Sync** - Hämta certifikat direkt från intern CA (admin):
+  - mTLS (klientcert + nyckel) eller API-nyckelautentisering
+  - CA DN-filter för att begränsa vilka CA:er som synkas
+  - Konfigurerbart synkintervall (timmar) eller manuell synk
+  - Testknapp som verifierar anslutning mot EJBCA REST API
+  - Status för senaste synk: antal hittade, nya och uppdaterade certifikat
 
 ### About
 - **Feature Overview** - Beskrivning av alla protokoll, skanningar, finding-kategorier och säkerhetsanalys
@@ -86,6 +92,8 @@ Full-featured web application for monitoring TLS certificate expiry, SSH securit
 | Manage users | No | No | Yes |
 | View audit logs | No | No | Yes |
 | Configure SIEM | No | No | Yes |
+| Configure EJBCA sync | No | No | Yes |
+| Trigger EJBCA sync | No | Yes | Yes |
 
 **Notering:** Endpoints och sweeps kan endast ändras/raderas av skaparen eller admin.
 
@@ -235,6 +243,11 @@ Full API reference available at:
 | GET | /api/settings/siem | Admin | Read SIEM settings |
 | PUT | /api/settings/siem | Admin | Update SIEM settings |
 | POST | /api/settings/siem/test | Admin | Send SIEM test event |
+| GET | /api/settings/ejbca | Admin | Read EJBCA settings |
+| PUT | /api/settings/ejbca | Admin | Update EJBCA settings |
+| POST | /api/settings/ejbca/test | Admin | Test EJBCA connectivity |
+| POST | /api/ejbca/sync | Editor+ | Trigger on-demand EJBCA sync |
+| GET | /api/ejbca/sync/status | Any auth | Last sync status |
 | GET | /metrics | None | Prometheus metrics |
 
 ## Configuration
@@ -269,6 +282,19 @@ siem:
   ca_pem: ""
   client_cert_pem: ""
   client_key_pem: ""
+
+ejbca:
+  enabled: false
+  base_url: "https://ejbca.example.com/ejbca-rest-api"
+  auth_method: "client_cert"   # "client_cert" | "api_key"
+  client_cert_pem: ""
+  client_key_pem: ""
+  ca_pem: ""
+  verify_tls: true
+  api_key: ""
+  ca_dn_filter: ""             # comma-separated, empty = all CAs
+  sync_interval_hours: 6       # 0 = manual only
+  max_results_per_page: 1000
 
 auth:
   mode: "local"
@@ -544,6 +570,7 @@ cp data/certificates.db backups/certificates-$(date +%Y%m%d).db
 - [API.md](API.md) - Complete API reference
 - [AUTHENTICATION.md](AUTHENTICATION.md) - Auth setup (Keycloak/Pomerium)
 - [CA_VALIDATION.md](CA_VALIDATION.md) - Custom CA management
+- [EJBCA.md](EJBCA.md) - EJBCA/PrimeKey integration guide
 
 ## License
 

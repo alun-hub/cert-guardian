@@ -39,6 +39,7 @@ Ett säkerhetsverktyg för att övervaka TLS-certifikat och skicka varningar til
 - **Scanner settings i UI** - ändra scan-intervall direkt i Settings (admin)
 - **Database Health panel** - storlek, antal rader och scan-volym
 - **SIEM-forwarding** - Stdout, Syslog eller Beats med TLS (testknapp i UI)
+- **EJBCA/PrimeKey-integration** - Hämta certifikat direkt från intern CA via REST API (mTLS eller API-nyckel, automatisk synk med konfigurerbart intervall)
 - **Rescan i sweeps** - starta om befintliga nätverkssvep
 - **Ägarskap för endpoints/sweeps** - bara skaparen/admin kan ändra/ta bort
 - **Prometheus metrics** - `/metrics` endpoint för Grafana dashboards och alerting
@@ -125,6 +126,7 @@ curl http://localhost:8000/metrics | grep cert_guardian
 | [API.md](API.md) | Komplett API-referens |
 | [AUTHENTICATION.md](AUTHENTICATION.md) | Autentisering med Keycloak/Pomerium |
 | [CA_VALIDATION.md](CA_VALIDATION.md) | Custom CA och certifikatvalidering |
+| [EJBCA.md](EJBCA.md) | EJBCA/PrimeKey-integration — konfiguration och felsökning |
 
 ## Roller och behörigheter
 
@@ -140,6 +142,8 @@ curl http://localhost:8000/metrics | grep cert_guardian
 | Användarhantering | ❌ | ❌ | ✅ |
 | Visa audit logs | ❌ | ❌ | ✅ |
 | Konfigurera SIEM | ❌ | ❌ | ✅ |
+| Konfigurera EJBCA | ❌ | ❌ | ✅ |
+| Trigga EJBCA-synk | ❌ | ✅ | ✅ |
 
 ## Konfigurationsexempel
 
@@ -182,6 +186,19 @@ siem:
   client_cert_pem: ""
   client_key_pem: ""
 
+ejbca:
+  enabled: false
+  base_url: "https://ejbca.example.com/ejbca-rest-api"
+  auth_method: "client_cert"   # "client_cert" | "api_key"
+  client_cert_pem: ""
+  client_key_pem: ""
+  ca_pem: ""
+  verify_tls: true
+  api_key: ""
+  ca_dn_filter: ""             # kommaseparerat, tomt = alla CA:er
+  sync_interval_hours: 6       # 0 = manuellt
+  max_results_per_page: 1000
+
 auth:
   mode: "local"
   local:
@@ -220,7 +237,7 @@ Kör via cron eller systemd timer för dagliga rapporter, t.ex.:
 
 ### Tabeller
 
-- **certificates** - Certifikat metadata
+- **certificates** - Certifikat metadata (inkl. `source`: `scan` | `ejbca`)
 - **endpoints** - Konfigurerade endpoints att scanna
 - **certificate_scans** - Historik över scanningar
 - **notifications** - Spårar skickade notifieringar
@@ -230,6 +247,8 @@ Kör via cron eller systemd timer för dagliga rapporter, t.ex.:
 - **refresh_tokens** - JWT refresh tokens
 - **trusted_cas** - Custom root-certifikat
 - **audit_log** - Spårning av användaraktiviteter
+- **ejbca_certificates** - EJBCA-specifik metadata per certifikat (CA DN, profiler, status)
+- **ejbca_sync_log** - Historik per EJBCA-synkkörning
 
 ## Säkerhetsöverväganden
 
