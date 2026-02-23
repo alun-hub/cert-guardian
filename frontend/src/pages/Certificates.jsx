@@ -359,6 +359,11 @@ function CertificateRow({ cert, isExpanded, onToggle }) {
           <div>
             <p className="font-medium text-gray-900">
               {extractCN(cert.subject)}
+              {cert.ejbca && (
+                <span className="bg-indigo-100 text-indigo-700 text-xs font-medium px-1.5 py-0.5 rounded ml-1">
+                  EJBCA
+                </span>
+              )}
             </p>
             <p className="text-xs text-gray-500 mt-1">
               Issued by: {extractCN(cert.issuer)}
@@ -402,8 +407,12 @@ function CertificateRow({ cert, isExpanded, onToggle }) {
               </p>
             )}
           </div>
+        ) : cert.ejbca ? (
+          <span className="text-xs text-indigo-600 font-mono">
+            {cert.ejbca.ca_dn?.match(/CN=([^,]+)/)?.[1] ?? cert.ejbca.ca_dn}
+          </span>
         ) : (
-          <span className="text-sm text-gray-500">No endpoints</span>
+          <span className="text-sm text-gray-400">—</span>
         )}
       </td>
       <td className="px-6 py-4">
@@ -631,6 +640,30 @@ function CertificateDetailsRow({ cert, loading }) {
               <div>
                 <p className="text-xs text-gray-500 uppercase tracking-wider">Validation</p>
                 <p className="text-red-700 mt-1">{cert.validation_error}</p>
+              </div>
+            )}
+            {cert.ejbca && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">EJBCA Source</p>
+                <div className="mt-1 space-y-1 text-sm">
+                  <p className="text-gray-900">CA DN: <span className="font-mono text-xs">{cert.ejbca.ca_dn}</span></p>
+                  {cert.ejbca.username && (
+                    <p className="text-gray-900">Username: {cert.ejbca.username}</p>
+                  )}
+                  {cert.ejbca.end_entity_profile && (
+                    <p className="text-gray-900">End Entity Profile: {cert.ejbca.end_entity_profile}</p>
+                  )}
+                  {cert.ejbca.certificate_profile && (
+                    <p className="text-gray-900">Certificate Profile: {cert.ejbca.certificate_profile}</p>
+                  )}
+                  <p className="text-gray-900">
+                    Status:{' '}
+                    <span className={cert.ejbca.ejbca_status === 'CERT_ACTIVE' ? 'text-green-700' : 'text-red-700'}>
+                      {cert.ejbca.ejbca_status}
+                    </span>
+                  </p>
+                  <p className="text-gray-500 text-xs">Last synced: {cert.ejbca.last_synced_at}</p>
+                </div>
               </div>
             )}
             <div>

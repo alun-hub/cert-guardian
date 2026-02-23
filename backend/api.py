@@ -21,6 +21,8 @@ from scanner import TLSScanner
 from notifier import MattermostNotifier
 from auth import AuthManager, User, LocalAuthProvider
 from siem_client import SiemClient
+from ejbca_client import EjbcaClient
+from ejbca_sync import run_ejbca_sync
 from ca_bundle import update_ca_bundle
 from tls_analyzer import analyze_endpoint, analyze_ssh, summarize_findings
 from ssh_scanner import scan_ssh
@@ -182,6 +184,20 @@ class SiemSettings(BaseModel):
 
 class SiemTestRequest(BaseModel):
     message: Optional[str] = "Test event from Certificate Guardian"
+
+
+class EjbcaSettings(BaseModel):
+    enabled: bool = False
+    base_url: Optional[str] = None
+    auth_method: str = "client_cert"
+    client_cert_pem: Optional[str] = None
+    client_key_pem: Optional[str] = None
+    ca_pem: Optional[str] = None
+    verify_tls: bool = True
+    api_key: Optional[str] = None
+    ca_dn_filter: Optional[str] = None
+    sync_interval_hours: int = 6
+    max_results_per_page: int = 1000
 
 
 class DashboardStats(BaseModel):
@@ -944,8 +960,17 @@ async def get_certificates(
         """, (cert_dict['id'],))
         
         cert_dict['endpoints'] = [dict(ep) for ep in cursor.fetchall()]
+
+        # Attach EJBCA metadata if present
+        cursor.execute(
+            "SELECT * FROM ejbca_certificates WHERE certificate_id = ?",
+            (cert_dict['id'],)
+        )
+        ejbca_row = cursor.fetchone()
+        cert_dict['ejbca'] = dict(ejbca_row) if ejbca_row else None
+
         results.append(cert_dict)
-    
+
     return {
         "certificates": results,
         "total": len(results),
@@ -1159,6 +1184,135 @@ async def test_siem_settings(
     return {"status": "sent"}
 
 
+# ===== EJBCA Endpoints =====
+
+@app.get("/api/settings/ejbca", response_model=EjbcaSettings)
+async def get_ejbca_settings(admin: User = Depends(require_admin)):
+    """Get EJBCA sync settings (admin only)"""
+    ejbca = (config or {}).get("ejbca", {})
+    return EjbcaSettings(
+        enabled=ejbca.get("enabled", False),
+        base_url=ejbca.get("base_url"),
+        auth_method=ejbca.get("auth_method", "client_cert"),
+        client_cert_pem=ejbca.get("client_cert_pem"),
+        client_key_pem=ejbca.get("client_key_pem"),
+        ca_pem=ejbca.get("ca_pem"),
+        verify_tls=ejbca.get("verify_tls", True),
+        api_key=ejbca.get("api_key"),
+        ca_dn_filter=ejbca.get("ca_dn_filter"),
+        sync_interval_hours=ejbca.get("sync_interval_hours", 6),
+        max_results_per_page=ejbca.get("max_results_per_page", 1000),
+    )
+
+
+@app.put("/api/settings/ejbca", response_model=EjbcaSettings)
+async def update_ejbca_settings(
+    settings: EjbcaSettings,
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """Save EJBCA sync settings (admin only)"""
+    if not config:
+        raise HTTPException(status_code=500, detail="Configuration not loaded")
+
+    config["ejbca"] = {
+        "enabled": settings.enabled,
+        "base_url": settings.base_url,
+        "auth_method": settings.auth_method,
+        "client_cert_pem": settings.client_cert_pem,
+        "client_key_pem": settings.client_key_pem,
+        "ca_pem": settings.ca_pem,
+        "verify_tls": settings.verify_tls,
+        "api_key": settings.api_key,
+        "ca_dn_filter": settings.ca_dn_filter,
+        "sync_interval_hours": settings.sync_interval_hours,
+        "max_results_per_page": settings.max_results_per_page,
+    }
+
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    audit_log(
+        user_email=admin.email,
+        action="ejbca_settings_update",
+        resource_type="settings",
+        details=f"Updated EJBCA settings: enabled={settings.enabled}",
+        ip_address=get_client_ip(request),
+    )
+
+    return EjbcaSettings(**config["ejbca"])
+
+
+@app.post("/api/settings/ejbca/test")
+async def test_ejbca_connection(
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """Test EJBCA connectivity using current config (admin only)"""
+    if not config:
+        raise HTTPException(status_code=500, detail="Configuration not loaded")
+
+    ejbca_cfg = config.get("ejbca", {})
+    if not ejbca_cfg.get("base_url"):
+        raise HTTPException(status_code=400, detail="EJBCA base_url not configured")
+
+    client = EjbcaClient(
+        base_url=ejbca_cfg["base_url"],
+        client_cert_pem=ejbca_cfg.get("client_cert_pem") or None,
+        client_key_pem=ejbca_cfg.get("client_key_pem") or None,
+        ca_pem=ejbca_cfg.get("ca_pem") or None,
+        verify_tls=ejbca_cfg.get("verify_tls", True),
+        api_key=ejbca_cfg.get("api_key") or None,
+    )
+    ok, message = client.test_connection()
+    return {"ok": ok, "message": message}
+
+
+@app.post("/api/ejbca/sync")
+async def trigger_ejbca_sync(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    user: User = Depends(require_editor),
+):
+    """Trigger an on-demand EJBCA sync (editor+)"""
+    if not config:
+        raise HTTPException(status_code=500, detail="Configuration not loaded")
+
+    ejbca_cfg = config.get("ejbca", {})
+    if not (ejbca_cfg.get("enabled") and ejbca_cfg.get("base_url")):
+        raise HTTPException(status_code=400, detail="EJBCA is not enabled or configured")
+
+    def _do_sync():
+        try:
+            run_ejbca_sync(ejbca_cfg, db)
+        except Exception as e:
+            import logging as _log
+            _log.getLogger(__name__).error(f"Background EJBCA sync error: {e}", exc_info=True)
+            db.add_ejbca_sync_log(0, 0, 0, 'failed', str(e))
+
+    background_tasks.add_task(_do_sync)
+
+    audit_log(
+        user_email=user.email,
+        action="ejbca_sync_triggered",
+        resource_type="ejbca",
+        details="Manual EJBCA sync triggered",
+        ip_address=get_client_ip(request),
+    )
+
+    return {"message": "EJBCA sync started in background"}
+
+
+@app.get("/api/ejbca/sync/status")
+async def get_ejbca_sync_status(user: User = Depends(require_auth)):
+    """Get the status of the last EJBCA sync (any authenticated user)"""
+    last = db.get_last_ejbca_sync()
+    return {"last_sync": last}
+
+
 # Get single certificate details
 @app.get("/api/certificates/{cert_id}")
 async def get_certificate(cert_id: int, user: User = Depends(require_auth)):
@@ -1216,7 +1370,15 @@ async def get_certificate(cert_id: int, user: User = Depends(require_auth)):
     """, (cert_id,))
     
     cert_dict['scan_history'] = [dict(scan) for scan in cursor.fetchall()]
-    
+
+    # Attach EJBCA metadata if present
+    cursor.execute(
+        "SELECT * FROM ejbca_certificates WHERE certificate_id = ?",
+        (cert_id,)
+    )
+    ejbca_row = cursor.fetchone()
+    cert_dict['ejbca'] = dict(ejbca_row) if ejbca_row else None
+
     return cert_dict
 
 

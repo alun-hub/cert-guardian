@@ -285,7 +285,36 @@ class CertificateGuardian:
         deleted = self.db.cleanup_orphaned_certificates()
         if deleted:
             logger.info(f"Cleaned up {deleted} orphaned certificate(s)")
+        self._maybe_sync_ejbca()
         logger.info("=== Scan cycle complete ===")
+
+    def _maybe_sync_ejbca(self):
+        """Run EJBCA sync if configured and interval has elapsed."""
+        ejbca_cfg = self.config.get('ejbca', {})
+        if not (ejbca_cfg.get('enabled') and ejbca_cfg.get('base_url')):
+            return
+        interval_h = ejbca_cfg.get('sync_interval_hours', 6)
+        if interval_h <= 0:
+            return  # manual-only mode
+        last = self.db.get_last_ejbca_sync()
+        if last:
+            from datetime import datetime, timezone
+            last_time = datetime.fromisoformat(last['synced_at'])
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(timezone.utc) - last_time).total_seconds()
+            if elapsed < interval_h * 3600:
+                return
+        from ejbca_sync import run_ejbca_sync
+        try:
+            result = run_ejbca_sync(ejbca_cfg, self.db)
+            logger.info(
+                f"EJBCA sync: {result['certs_found']} found, "
+                f"{result['certs_new']} new, {result['certs_updated']} updated"
+            )
+        except Exception as e:
+            logger.error(f"EJBCA sync failed: {e}", exc_info=True)
+            self.db.add_ejbca_sync_log(0, 0, 0, 'failed', str(e))
     
     def run_continuous(self):
         """Run continuous monitoring"""

@@ -21,6 +21,18 @@ export default function Settings() {
   const [siemLoading, setSiemLoading] = useState(true)
   const [siemSaving, setSiemSaving] = useState(false)
   const [siemError, setSiemError] = useState('')
+  const [ejbcaSettings, setEjbcaSettings] = useState({
+    enabled: false, base_url: '', auth_method: 'client_cert',
+    client_cert_pem: '', client_key_pem: '', ca_pem: '',
+    verify_tls: true, api_key: '', ca_dn_filter: '',
+    sync_interval_hours: 6, max_results_per_page: 1000,
+  })
+  const [ejbcaLoading, setEjbcaLoading] = useState(true)
+  const [ejbcaSaving, setEjbcaSaving] = useState(false)
+  const [ejbcaError, setEjbcaError] = useState('')
+  const [ejbcaTesting, setEjbcaTesting] = useState(false)
+  const [ejbcaSyncing, setEjbcaSyncing] = useState(false)
+  const [lastSync, setLastSync] = useState(null)
 
   const loadTrustedCAs = async () => {
     try {
@@ -91,6 +103,81 @@ export default function Settings() {
   useEffect(() => {
     loadSiemSettings()
   }, [isAdmin])
+
+  const loadEjbcaSettings = async () => {
+    if (!isAdmin) return
+    try {
+      setEjbcaLoading(true)
+      const [settingsRes, statusRes] = await Promise.all([
+        api.get('/settings/ejbca'),
+        api.get('/ejbca/sync/status'),
+      ])
+      setEjbcaSettings(settingsRes.data)
+      setLastSync(statusRes.data.last_sync)
+    } catch (error) {
+      const detail = error.response?.data?.detail
+      setEjbcaError(detail || 'Failed to load EJBCA settings')
+    } finally {
+      setEjbcaLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadEjbcaSettings()
+  }, [isAdmin])
+
+  const handleSaveEjbcaSettings = async () => {
+    try {
+      setEjbcaSaving(true)
+      setEjbcaError('')
+      const response = await api.put('/settings/ejbca', ejbcaSettings)
+      setEjbcaSettings(response.data)
+    } catch (error) {
+      const detail = error.response?.data?.detail
+      setEjbcaError(detail || 'Failed to save EJBCA settings')
+    } finally {
+      setEjbcaSaving(false)
+    }
+  }
+
+  const handleTestEjbca = async () => {
+    try {
+      setEjbcaTesting(true)
+      setEjbcaError('')
+      const response = await api.post('/settings/ejbca/test')
+      if (response.data.ok) {
+        setEjbcaError('')
+        alert(`Connection OK: ${response.data.message}`)
+      } else {
+        setEjbcaError(`Connection failed: ${response.data.message}`)
+      }
+    } catch (error) {
+      const detail = error.response?.data?.detail
+      setEjbcaError(detail || 'Connection test failed')
+    } finally {
+      setEjbcaTesting(false)
+    }
+  }
+
+  const handleSyncEjbca = async () => {
+    try {
+      setEjbcaSyncing(true)
+      setEjbcaError('')
+      await api.post('/ejbca/sync')
+      // Poll status after a short delay
+      setTimeout(async () => {
+        try {
+          const statusRes = await api.get('/ejbca/sync/status')
+          setLastSync(statusRes.data.last_sync)
+        } catch (_) {}
+        setEjbcaSyncing(false)
+      }, 2000)
+    } catch (error) {
+      const detail = error.response?.data?.detail
+      setEjbcaError(detail || 'Sync failed')
+      setEjbcaSyncing(false)
+    }
+  }
 
   const handleSaveSiemSettings = async () => {
     try {
@@ -452,6 +539,178 @@ export default function Settings() {
               >
                 Send Test Event
               </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <Shield className="w-6 h-6 text-indigo-600" />
+            <div>
+              <h2 className="text-lg font-semibold">EJBCA / PrimeKey Sync</h2>
+              <p className="text-sm text-gray-500">
+                Fetch certificates directly from an EJBCA CA server
+              </p>
+            </div>
+          </div>
+
+          {ejbcaLoading ? (
+            <div className="text-center py-6">
+              <div className="inline-block animate-spin rounded-full h-6 w-6 border-4 border-gray-300 border-t-indigo-600"></div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {ejbcaError && (
+                <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm">
+                  {ejbcaError}
+                </div>
+              )}
+
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(ejbcaSettings.enabled)}
+                  onChange={(e) => setEjbcaSettings(prev => ({ ...prev, enabled: e.target.checked }))}
+                />
+                Enable EJBCA sync
+              </label>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                <input
+                  type="text"
+                  placeholder="https://ejbca.example.com/ejbca-rest-api"
+                  value={ejbcaSettings.base_url || ''}
+                  onChange={(e) => setEjbcaSettings(prev => ({ ...prev, base_url: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Auth method</label>
+                <select
+                  value={ejbcaSettings.auth_method || 'client_cert'}
+                  onChange={(e) => setEjbcaSettings(prev => ({ ...prev, auth_method: e.target.value }))}
+                  className="w-48 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="client_cert">Client certificate</option>
+                  <option value="api_key">API key</option>
+                </select>
+              </div>
+
+              {ejbcaSettings.auth_method === 'client_cert' ? (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Client certificate PEM</label>
+                      <textarea
+                        value={ejbcaSettings.client_cert_pem || ''}
+                        onChange={(e) => setEjbcaSettings(prev => ({ ...prev, client_cert_pem: e.target.value }))}
+                        rows={4}
+                        placeholder="-----BEGIN CERTIFICATE-----"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Client key PEM</label>
+                      <textarea
+                        value={ejbcaSettings.client_key_pem || ''}
+                        onChange={(e) => setEjbcaSettings(prev => ({ ...prev, client_key_pem: e.target.value }))}
+                        rows={4}
+                        placeholder="-----BEGIN PRIVATE KEY-----"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">CA certificate PEM (optional)</label>
+                    <textarea
+                      value={ejbcaSettings.ca_pem || ''}
+                      onChange={(e) => setEjbcaSettings(prev => ({ ...prev, ca_pem: e.target.value }))}
+                      rows={3}
+                      placeholder="-----BEGIN CERTIFICATE-----"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(ejbcaSettings.verify_tls)}
+                      onChange={(e) => setEjbcaSettings(prev => ({ ...prev, verify_tls: e.target.checked }))}
+                    />
+                    Verify TLS
+                  </label>
+                </>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">API key</label>
+                  <input
+                    type="password"
+                    value={ejbcaSettings.api_key || ''}
+                    onChange={(e) => setEjbcaSettings(prev => ({ ...prev, api_key: e.target.value }))}
+                    className="w-full max-w-sm px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">CA DN filter (comma-separated, empty = all)</label>
+                  <input
+                    type="text"
+                    value={ejbcaSettings.ca_dn_filter || ''}
+                    onChange={(e) => setEjbcaSettings(prev => ({ ...prev, ca_dn_filter: e.target.value }))}
+                    placeholder="CN=MyCA,O=Example"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Sync interval (hours, 0 = manual only)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={ejbcaSettings.sync_interval_hours ?? 6}
+                    onChange={(e) => setEjbcaSettings(prev => ({ ...prev, sync_interval_hours: Number(e.target.value) }))}
+                    className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleTestEjbca}
+                  disabled={ejbcaTesting || ejbcaSaving}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                >
+                  {ejbcaTesting ? 'Testing...' : 'Test connection'}
+                </button>
+                <button
+                  onClick={handleSaveEjbcaSettings}
+                  disabled={ejbcaSaving || ejbcaTesting}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {ejbcaSaving ? 'Saving...' : 'Save settings'}
+                </button>
+                <button
+                  onClick={handleSyncEjbca}
+                  disabled={ejbcaSyncing || !ejbcaSettings.enabled}
+                  className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 disabled:opacity-50"
+                >
+                  {ejbcaSyncing ? 'Syncing...' : 'Sync now'}
+                </button>
+              </div>
+
+              {lastSync && (
+                <div className="text-sm text-gray-500 mt-1">
+                  Last sync: {new Date(lastSync.synced_at).toLocaleString()} —{' '}
+                  {lastSync.certs_found} certs, {lastSync.certs_new} new, {lastSync.certs_updated} updated
+                  {lastSync.status === 'failed' && (
+                    <span className="ml-2 text-red-600">({lastSync.error_message})</span>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

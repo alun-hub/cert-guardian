@@ -285,8 +285,42 @@ class Database:
             )
         """)
 
+        # EJBCA integration tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ejbca_certificates (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                certificate_id       INTEGER NOT NULL UNIQUE,
+                ejbca_url            TEXT NOT NULL,
+                ca_dn                TEXT NOT NULL,
+                username             TEXT,
+                end_entity_profile   TEXT,
+                certificate_profile  TEXT,
+                ejbca_status         TEXT NOT NULL DEFAULT 'CERT_ACTIVE',
+                last_synced_at       TEXT NOT NULL,
+                FOREIGN KEY (certificate_id) REFERENCES certificates(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ejbca_sync_log (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                synced_at      TEXT NOT NULL,
+                certs_found    INTEGER DEFAULT 0,
+                certs_new      INTEGER DEFAULT 0,
+                certs_updated  INTEGER DEFAULT 0,
+                status         TEXT NOT NULL,
+                error_message  TEXT
+            )
+        """)
+
+        # Migration: add source column to certificates
+        try:
+            cursor.execute("ALTER TABLE certificates ADD COLUMN source TEXT DEFAULT 'scan'")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         self.conn.commit()
-    
+
     def add_endpoint(self, host: str, port: int, owner: str = None,
                      criticality: str = "medium", created_by: str = None,
                      webhook_url: str = None) -> int:
@@ -331,7 +365,8 @@ class Database:
                        cors_wildcard: bool = None,
                        trace_enabled: bool = None,
                        oidc_config: dict = None,
-                       saml_config: dict = None) -> int:
+                       saml_config: dict = None,
+                       source: str = 'scan') -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
@@ -358,9 +393,10 @@ class Database:
                 ldap_anon_bind_allowed, ldap_plain_available,
                 server_header, cors_wildcard, trace_enabled,
                 oidc_config, saml_config,
+                source,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 subject = excluded.subject,
                 issuer = excluded.issuer,
@@ -417,6 +453,7 @@ class Database:
               _bool_or_none(ldap_anon_bind_allowed), _bool_or_none(ldap_plain_available),
               server_header, _bool_or_none(cors_wildcard), _bool_or_none(trace_enabled),
               oidc_config_json, saml_config_json,
+              source,
               now, now))
         self.conn.commit()
 
@@ -890,7 +927,8 @@ class Database:
         cursor.execute("""
             DELETE FROM certificate_scans WHERE certificate_id IN (
                 SELECT c.id FROM certificates c
-                WHERE c.id NOT IN (
+                WHERE (c.source IS NULL OR c.source != 'ejbca')
+                AND c.id NOT IN (
                     SELECT cs.certificate_id
                     FROM certificate_scans cs
                     WHERE cs.status = 'success'
@@ -904,7 +942,9 @@ class Database:
             )
         """)
         cursor.execute("""
-            DELETE FROM certificates WHERE id NOT IN (
+            DELETE FROM certificates
+            WHERE (source IS NULL OR source != 'ejbca')
+            AND id NOT IN (
                 SELECT cs.certificate_id
                 FROM certificate_scans cs
                 WHERE cs.status = 'success'
@@ -919,6 +959,59 @@ class Database:
         deleted = cursor.rowcount
         self.conn.commit()
         return deleted
+
+    # ==================== EJBCA Methods ====================
+
+    def get_certificate_by_fingerprint(self, fingerprint: str) -> Optional[Dict]:
+        """Get certificate by fingerprint"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM certificates WHERE fingerprint = ?", (fingerprint,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def add_ejbca_certificate(self, certificate_id: int, ejbca_url: str, ca_dn: str,
+                               username: str = None, end_entity_profile: str = None,
+                               certificate_profile: str = None,
+                               ejbca_status: str = 'CERT_ACTIVE') -> None:
+        """Insert or replace EJBCA-specific metadata for a certificate"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            INSERT INTO ejbca_certificates (
+                certificate_id, ejbca_url, ca_dn, username,
+                end_entity_profile, certificate_profile, ejbca_status, last_synced_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(certificate_id) DO UPDATE SET
+                ejbca_url = excluded.ejbca_url,
+                ca_dn = excluded.ca_dn,
+                username = excluded.username,
+                end_entity_profile = excluded.end_entity_profile,
+                certificate_profile = excluded.certificate_profile,
+                ejbca_status = excluded.ejbca_status,
+                last_synced_at = excluded.last_synced_at
+        """, (certificate_id, ejbca_url, ca_dn, username,
+              end_entity_profile, certificate_profile, ejbca_status, now))
+        self.conn.commit()
+
+    def add_ejbca_sync_log(self, certs_found: int, certs_new: int, certs_updated: int,
+                            status: str, error: str = None) -> int:
+        """Insert an EJBCA sync log entry"""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            INSERT INTO ejbca_sync_log (synced_at, certs_found, certs_new, certs_updated, status, error_message)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (now, certs_found, certs_new, certs_updated, status, error))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_last_ejbca_sync(self) -> Optional[Dict]:
+        """Get the most recent EJBCA sync log entry"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM ejbca_sync_log ORDER BY synced_at DESC LIMIT 1")
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     # ==================== Audit Log Methods ====================
 
