@@ -1615,7 +1615,7 @@ async def trigger_scan(
             else:
                 db.add_scan(0, eid, 'failed', 'Failed to retrieve certificate')
 
-    async def do_scan(endpoint_id: Optional[int] = None):
+    def do_scan(endpoint_id: Optional[int] = None):
         if endpoint_id:
             # Scan specific endpoint
             cursor = db.conn.cursor()

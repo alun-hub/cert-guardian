@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   AlertTriangle,
   CheckCircle,
@@ -29,23 +29,24 @@ export default function Dashboard() {
   const [recentCerts, setRecentCerts] = useState([])
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
+  const scanPollRef = useRef(null)
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const [statsRes, timelineRes, certsRes] = await Promise.all([
         dashboardService.getStats(),
         dashboardService.getTimeline(),
         certificateService.getAll({ expiring_days: 30, limit: 5 })
       ])
-      
+
       setStats(statsRes.data)
       setTimeline(timelineRes.data.timeline)
       setRecentCerts(certsRes.data.certificates)
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -53,16 +54,26 @@ export default function Dashboard() {
     loadData()
   }, [])
 
+  // Poll every 5 s while scanning, stop after 2 minutes
+  useEffect(() => {
+    if (!scanning) return
+    scanPollRef.current = setInterval(() => loadData(true), 5000)
+    const timeout = setTimeout(() => {
+      setScanning(false)
+    }, 120000)
+    return () => {
+      clearInterval(scanPollRef.current)
+      clearTimeout(timeout)
+    }
+  }, [scanning])
+
   const handleScanAll = async () => {
     if (!confirm('This will scan all endpoints. Are you sure?')) return
     try {
-      setScanning(true)
       await scanService.triggerScan()
-      setTimeout(loadData, 2000) // Reload after scan
+      setScanning(true)
     } catch (error) {
       console.error('Scan failed:', error)
-    } finally {
-      setScanning(false)
     }
   }
 

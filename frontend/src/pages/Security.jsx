@@ -90,6 +90,30 @@ export default function Security() {
 
   const tlsReport = report.filter(e => e.endpoint_type !== 'ssh')
   const sshReport  = report.filter(e => e.endpoint_type === 'ssh')
+
+  const recomputeSummary = (findings) => {
+    const s = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+    findings.forEach(f => { if (s[f.severity] !== undefined) s[f.severity]++ })
+    return s
+  }
+
+  // TLS tab: exclude header-category findings (those live in HTTP-headers tab)
+  const tlsReportNoHeaders = tlsReport.map(e => {
+    const findings = e.findings.filter(f => f.category !== 'headers')
+    return { ...e, findings, summary: recomputeSummary(findings) }
+  })
+
+  // HTTP-headers tab: header-category findings per endpoint
+  const headerFindings = tlsReport
+    .map(e => ({
+      endpoint_id: e.endpoint_id,
+      host: e.host,
+      port: e.port,
+      owner: e.owner,
+      findings: e.findings.filter(f => f.category === 'headers'),
+    }))
+    .filter(e => e.findings.length > 0)
+
   const totalFindings = Object.values(reportSummary).reduce((a, b) => a + b, 0)
 
   return (
@@ -153,7 +177,7 @@ export default function Security() {
 
       {/* Tab content */}
       {activeTab === 'tls' && (
-        <ReportTab report={tlsReport} loading={reportLoading} />
+        <ReportTab report={tlsReportNoHeaders} loading={reportLoading} />
       )}
       {activeTab === 'ssh' && (
         <ReportTab report={sshReport} loading={reportLoading} />
@@ -162,7 +186,7 @@ export default function Security() {
         <IssuesTab issues={issues} loading={loading} />
       )}
       {activeTab === 'headers' && (
-        <HeadersTab headers={headers} loading={headersLoading} />
+        <HeadersTab headers={headers} loading={headersLoading} headerFindings={headerFindings} reportLoading={reportLoading} />
       )}
     </div>
   )
@@ -452,7 +476,7 @@ function IssueCard({ issue }) {
 // HTTP headers tab
 // ─────────────────────────────────────────────────────────────────────────────
 
-function HeadersTab({ headers, loading }) {
+function HeadersTab({ headers, loading, headerFindings = [], reportLoading }) {
   const [expandedId, setExpandedId] = useState(null)
 
   if (loading) return <LoadingSpinner />
@@ -468,6 +492,7 @@ function HeadersTab({ headers, loading }) {
   }
 
   return (
+    <div className="space-y-6">
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
       <table className="w-full">
         <thead className="bg-gray-50 border-b">
@@ -493,6 +518,25 @@ function HeadersTab({ headers, loading }) {
           })}
         </tbody>
       </table>
+    </div>
+
+    {/* Security findings for header category */}
+    {!reportLoading && headerFindings.length > 0 && (
+      <div className="space-y-2">
+        <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wider px-1">Säkerhetsfynd</h3>
+        {headerFindings.map(endpoint => (
+          <div key={endpoint.endpoint_id} className="bg-white rounded-lg shadow-sm border overflow-hidden">
+            <div className="px-6 py-3 bg-gray-50 border-b flex items-center gap-2">
+              <span className="font-medium text-gray-900 text-sm">{endpoint.host}:{endpoint.port}</span>
+              {endpoint.owner && <span className="text-xs text-gray-500">— {endpoint.owner}</span>}
+            </div>
+            <div className="divide-y divide-gray-50">
+              {endpoint.findings.map(f => <FindingRow key={f.finding_id} finding={f} />)}
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
     </div>
   )
 }
