@@ -5,14 +5,20 @@ HTTP Security Header Scanner
 Analyzes HTTP response headers for security best practices:
 HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
 Permissions-Policy, X-XSS-Protection.
+
+Also checks:
+- HTTP → HTTPS redirect (port 80 redirects to HTTPS)
+- Cookie security flags (Secure, HttpOnly, SameSite)
 """
 import socket
 import ssl
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from urllib.request import Request, urlopen
 from urllib.error import URLError
+from urllib.parse import urlparse
+import http.client
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +32,12 @@ GRADE_THRESHOLDS = [
 
 
 @dataclass
+class CookieIssue:
+    name: str
+    missing_flags: List[str]   # e.g. ["Secure", "HttpOnly", "SameSite"]
+
+
+@dataclass
 class HeaderResult:
     header_score: int                       # 0-100
     header_grade: str                       # A/B/C/D/F
@@ -34,6 +46,11 @@ class HeaderResult:
     hsts_max_age: Optional[int] = None
     csp_has_unsafe_inline: Optional[bool] = None
     recommendations: List[str] = field(default_factory=list)
+    # HTTP → HTTPS redirect
+    redirects_to_https: Optional[bool] = None
+    redirect_status_code: Optional[int] = None
+    # Cookie security flags
+    cookie_issues: List[CookieIssue] = field(default_factory=list)
 
 
 def _score_to_grade(score: int) -> str:
@@ -59,24 +76,26 @@ class HTTPHeaderScanner:
 
         url = f"https://{host}:{port}/" if port != 443 else f"https://{host}/"
 
-        headers = self._fetch_headers(url)
+        headers, set_cookies = self._fetch_headers(url)
         if headers is None:
             return None
 
-        return self._analyse(headers)
+        result = self._analyse(headers, set_cookies)
+
+        # HTTP → HTTPS redirect check (only relevant for standard HTTPS on 443)
+        if port == 443:
+            redirects, status = self._check_http_redirect(host)
+            result.redirects_to_https = redirects
+            result.redirect_status_code = status
+
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _is_http_service(self, host: str, port: int) -> bool:
-        """Quick probe to check if the TLS endpoint speaks HTTP.
-
-        Opens a TLS connection, sends a minimal HTTP HEAD request, and checks
-        whether the first bytes of the response look like an HTTP status line.
-        Uses a short 3-second timeout so non-HTTP services fail fast instead
-        of blocking the scanner for the full request timeout.
-        """
+        """Quick probe to check if the TLS endpoint speaks HTTP."""
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -101,26 +120,89 @@ class HTTPHeaderScanner:
                 except Exception:
                     pass
 
-    def _fetch_headers(self, url: str) -> Optional[dict]:
-        """GET *url* and return a lower-cased header dict, or None on error."""
+    def _fetch_headers(self, url: str):
+        """GET *url* and return (headers_dict, set_cookie_list), or (None, []) on error.
+
+        Collects all Set-Cookie headers separately to preserve duplicates.
+        """
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE  # We only care about HTTP headers
+        ctx.verify_mode = ssl.CERT_NONE
 
         req = Request(url, method="GET")
         req.add_header("User-Agent", "CertGuardian-HeaderScanner/1.0")
 
         try:
             with urlopen(req, timeout=self.timeout, context=ctx) as resp:
-                return {k.lower(): v for k, v in resp.headers.items()}
+                headers = {}
+                set_cookies = []
+                for k, v in resp.headers.items():
+                    k_lower = k.lower()
+                    if k_lower == "set-cookie":
+                        set_cookies.append(v)
+                    else:
+                        headers[k_lower] = v
+                return headers, set_cookies
         except URLError as exc:
             logger.warning("HTTP header scan failed for %s: %s", url, exc)
-            return None
+            return None, []
         except Exception as exc:
             logger.warning("HTTP header scan error for %s: %s", url, exc)
-            return None
+            return None, []
 
-    def _analyse(self, headers: dict) -> HeaderResult:
+    def _check_http_redirect(self, host: str) -> tuple:
+        """Check if http://host:80/ redirects to HTTPS.
+
+        Returns (redirects_to_https: bool, status_code: int | None).
+        """
+        try:
+            conn = http.client.HTTPConnection(host, 80, timeout=5)
+            conn.request("HEAD", "/", headers={"Host": host,
+                                                "User-Agent": "CertGuardian-HeaderScanner/1.0"})
+            resp = conn.getresponse()
+            status = resp.status
+            location = resp.getheader("Location", "")
+            conn.close()
+
+            if status in (301, 302, 307, 308):
+                redirects = location.lower().startswith("https://")
+                return redirects, status
+            else:
+                # Port 80 responds but doesn't redirect
+                return False, status
+        except ConnectionRefusedError:
+            # Port 80 not open — can't determine redirect
+            return None, None
+        except Exception as exc:
+            logger.debug("HTTP redirect check failed for %s: %s", host, exc)
+            return None, None
+
+    def _parse_cookies(self, set_cookies: List[str]) -> List[CookieIssue]:
+        """Parse Set-Cookie headers and report missing security flags."""
+        issues = []
+        for raw in set_cookies:
+            parts = [p.strip() for p in raw.split(";")]
+            if not parts:
+                continue
+
+            # First part is name=value
+            name = parts[0].split("=", 1)[0].strip() or "<unnamed>"
+            flags_lower = {p.lower() for p in parts[1:]}
+
+            missing = []
+            if "secure" not in flags_lower:
+                missing.append("Secure")
+            if "httponly" not in flags_lower:
+                missing.append("HttpOnly")
+            if not any(f.startswith("samesite") for f in flags_lower):
+                missing.append("SameSite")
+
+            if missing:
+                issues.append(CookieIssue(name=name, missing_flags=missing))
+
+        return issues
+
+    def _analyse(self, headers: dict, set_cookies: List[str]) -> HeaderResult:
         score = 0
         present: List[str] = []
         missing: List[str] = []
@@ -214,10 +296,10 @@ class HTTPHeaderScanner:
         xxss = headers.get("x-xss-protection")
         if xxss:
             present.append("x-xss-protection")
-        # Not added to missing — deprecated header, info only
 
-        # Cap score at 100
         score = min(score, 100)
+
+        cookie_issues = self._parse_cookies(set_cookies)
 
         return HeaderResult(
             header_score=score,
@@ -227,6 +309,7 @@ class HTTPHeaderScanner:
             hsts_max_age=hsts_max_age,
             csp_has_unsafe_inline=csp_has_unsafe_inline,
             recommendations=recommendations,
+            cookie_issues=cookie_issues,
         )
 
     @staticmethod

@@ -24,6 +24,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed448
 
 from http_scanner import HTTPHeaderScanner
+from dns_scanner import check_caa
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,13 @@ class CertificateInfo:
     hsts_max_age: Optional[int] = None
     csp_has_unsafe_inline: Optional[bool] = None
     header_recommendations: Optional[List[str]] = None
+    # HTTP → HTTPS redirect
+    redirects_to_https: Optional[bool] = None
+    # Cookie security flags
+    insecure_cookies: Optional[List[dict]] = None
+    # DNS / CAA
+    caa_present: Optional[bool] = None
+    caa_records: Optional[List[str]] = None
 
 
 class TLSScanner:
@@ -470,8 +478,22 @@ class TLSScanner:
                             cert_info.hsts_max_age = header_result.hsts_max_age
                             cert_info.csp_has_unsafe_inline = header_result.csp_has_unsafe_inline
                             cert_info.header_recommendations = header_result.recommendations
+                            cert_info.redirects_to_https = header_result.redirects_to_https
+                            cert_info.insecure_cookies = [
+                                {"name": c.name, "missing_flags": c.missing_flags}
+                                for c in header_result.cookie_issues
+                            ]
                     except Exception as e:
                         logger.warning(f"HTTP header scan failed for {host}:{port}: {e}")
+
+                    # CAA DNS check
+                    try:
+                        caa_result = check_caa(host)
+                        if caa_result.caa_checked:
+                            cert_info.caa_present = caa_result.caa_present
+                            cert_info.caa_records = caa_result.caa_records
+                    except Exception as e:
+                        logger.warning(f"CAA check failed for {host}: {e}")
 
                     status_msg = f"Successfully scanned {host}:{port} - expires {not_after}"
                     if is_self_signed:

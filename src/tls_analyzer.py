@@ -459,6 +459,91 @@ def analyze_endpoint(row: dict) -> List[SecurityFinding]:
             ),
         ))
 
+    # ------------------------------------------------------------------ #
+    # CAA record findings
+    # ------------------------------------------------------------------ #
+
+    caa_present = row.get("caa_present")
+    if caa_present == 0:
+        findings.append(SecurityFinding(
+            finding_id="NO_CAA_RECORD",
+            severity="medium",
+            category="dns",
+            title="CAA-poster saknas i DNS",
+            description=(
+                "Certificate Authority Authorization (CAA) är en DNS-post som anger "
+                "vilka CA:er som är tillåtna att utfärda certifikat för domänen. "
+                "Utan CAA kan vilken som helst CA utfärda ett certifikat för din domän, "
+                "vilket ökar risken för felaktigt utfärdade certifikat."
+            ),
+            recommendation=(
+                "Lägg till en CAA-post i DNS. Exempel för Let's Encrypt: "
+                "example.com. CAA 0 issue \"letsencrypt.org\" "
+                "Lägg även till en IODEF-post för incidentrapportering: "
+                "example.com. CAA 0 iodef \"mailto:security@example.com\""
+            ),
+        ))
+
+    # ------------------------------------------------------------------ #
+    # HTTP → HTTPS redirect findings
+    # ------------------------------------------------------------------ #
+
+    redirects_to_https = row.get("redirects_to_https")
+    if redirects_to_https == 0:
+        findings.append(SecurityFinding(
+            finding_id="NO_HTTPS_REDIRECT",
+            severity="medium",
+            category="headers",
+            title="HTTP omdirigerar inte till HTTPS",
+            description=(
+                "Port 80 (HTTP) svarar men omdirigerar inte trafiken till HTTPS. "
+                "Användare som besöker http:// exponeras för man-in-the-middle-attacker "
+                "och avlyssning innan de når den säkra anslutningen."
+            ),
+            recommendation=(
+                "Konfigurera servern att alltid omdirigera HTTP till HTTPS med "
+                "en permanent redirect (301). Exempel för nginx: "
+                "server { listen 80; return 301 https://$host$request_uri; }"
+            ),
+        ))
+
+    # ------------------------------------------------------------------ #
+    # Cookie security flag findings
+    # ------------------------------------------------------------------ #
+
+    insecure_cookies = _parse_json_field(row.get("insecure_cookies"))
+    if insecure_cookies:
+        all_missing = set()
+        cookie_names = []
+        for cookie in insecure_cookies:
+            if isinstance(cookie, dict):
+                cookie_names.append(cookie.get("name", "?"))
+                for flag in cookie.get("missing_flags", []):
+                    all_missing.add(flag)
+
+        missing_str = ", ".join(sorted(all_missing))
+        names_str = ", ".join(cookie_names[:5])
+        if len(cookie_names) > 5:
+            names_str += f" (+{len(cookie_names) - 5} till)"
+
+        findings.append(SecurityFinding(
+            finding_id="INSECURE_COOKIES",
+            severity="medium",
+            category="headers",
+            title=f"Cookies saknar säkerhetsflaggor ({missing_str})",
+            description=(
+                f"Följande cookies saknar viktiga säkerhetsflaggor: {names_str}. "
+                "Utan Secure-flaggan kan cookies skickas över okrypterad HTTP. "
+                "Utan HttpOnly kan JavaScript läsa cookievärden, vilket möjliggör "
+                "session hijacking via XSS. Utan SameSite ökar risken för CSRF-attacker."
+            ),
+            recommendation=(
+                "Sätt alla tre flaggor på sessions- och autentiseringscookies: "
+                "Set-Cookie: session=...; Secure; HttpOnly; SameSite=Strict"
+            ),
+            detail=f"Cookies: {names_str}  |  Saknade flaggor: {missing_str}",
+        ))
+
     # Sort by severity
     findings.sort(key=lambda f: SEVERITY_ORDER.get(f.severity, 99))
     return findings

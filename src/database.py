@@ -139,6 +139,10 @@ class Database:
             "hsts_max_age INTEGER",
             "csp_has_unsafe_inline INTEGER",
             "header_recommendations TEXT",
+            "redirects_to_https INTEGER",
+            "insecure_cookies TEXT",
+            "caa_present INTEGER",
+            "caa_records TEXT",
         ]:
             try:
                 cursor.execute(f"ALTER TABLE certificates ADD COLUMN {col_def}")
@@ -285,7 +289,11 @@ class Database:
                        headers_missing: List[str] = None,
                        hsts_max_age: int = None,
                        csp_has_unsafe_inline: bool = None,
-                       header_recommendations: List[str] = None) -> int:
+                       header_recommendations: List[str] = None,
+                       redirects_to_https: bool = None,
+                       insecure_cookies: List[dict] = None,
+                       caa_present: bool = None,
+                       caa_records: List[str] = None) -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
@@ -293,6 +301,8 @@ class Database:
         headers_present_json = json.dumps(headers_present) if headers_present else None
         headers_missing_json = json.dumps(headers_missing) if headers_missing else None
         header_recommendations_json = json.dumps(header_recommendations) if header_recommendations else None
+        insecure_cookies_json = json.dumps(insecure_cookies) if insecure_cookies is not None else None
+        caa_records_json = json.dumps(caa_records) if caa_records is not None else None
 
         cursor.execute("""
             INSERT INTO certificates (
@@ -304,9 +314,10 @@ class Database:
                 is_self_signed, is_trusted_ca, validation_error, chain_length,
                 header_score, header_grade, headers_present, headers_missing,
                 hsts_max_age, csp_has_unsafe_inline, header_recommendations,
+                redirects_to_https, insecure_cookies, caa_present, caa_records,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 subject = excluded.subject,
                 issuer = excluded.issuer,
@@ -336,6 +347,10 @@ class Database:
                 hsts_max_age = excluded.hsts_max_age,
                 csp_has_unsafe_inline = excluded.csp_has_unsafe_inline,
                 header_recommendations = excluded.header_recommendations,
+                redirects_to_https = excluded.redirects_to_https,
+                insecure_cookies = excluded.insecure_cookies,
+                caa_present = excluded.caa_present,
+                caa_records = excluded.caa_records,
                 updated_at = excluded.updated_at
         """, (fingerprint, subject, issuer, not_before, not_after,
               serial_number, san_json, key_type, key_size, signature_algorithm,
@@ -347,6 +362,8 @@ class Database:
               chain_length,
               header_score, header_grade, headers_present_json, headers_missing_json,
               hsts_max_age, _bool_or_none(csp_has_unsafe_inline), header_recommendations_json,
+              _bool_or_none(redirects_to_https), insecure_cookies_json,
+              _bool_or_none(caa_present), caa_records_json,
               now, now))
         self.conn.commit()
 
@@ -920,6 +937,10 @@ class Database:
                 c.hsts_max_age,
                 c.csp_has_unsafe_inline,
                 c.header_recommendations,
+                c.redirects_to_https,
+                c.insecure_cookies,
+                c.caa_present,
+                c.caa_records,
                 e.id                            AS endpoint_id,
                 e.host,
                 e.port,

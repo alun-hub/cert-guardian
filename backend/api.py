@@ -1601,6 +1601,10 @@ async def trigger_scan(
                         hsts_max_age=cert_info.hsts_max_age,
                         csp_has_unsafe_inline=cert_info.csp_has_unsafe_inline,
                         header_recommendations=cert_info.header_recommendations,
+                        redirects_to_https=cert_info.redirects_to_https,
+                        insecure_cookies=cert_info.insecure_cookies,
+                        caa_present=cert_info.caa_present,
+                        caa_records=cert_info.caa_records,
                     )
                     db.add_scan(
                         cert_id, endpoint['id'], 'success',
