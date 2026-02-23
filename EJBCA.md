@@ -321,9 +321,9 @@ Antingen:
 
 Klientcertifikatet saknar behörighet i EJBCA:
 1. Logga in i EJBCA Admin UI
-2. Gå till **Roles and Access Rules** → hitta eller skapa en roll
-3. Lägg till access rule **`/rest/v1/certificate`** (läs) och **`/rest/v2/certificate`** (läs)
-4. Lägg till klientens End Entity i rollen
+2. Gå till **Roller och åtkomstregler** → hitta eller skapa en roll
+3. Lägg till åtkomstregel **`/rest/v1/certificate`** (läs) och **`/rest/v2/certificate`** (läs)
+4. Lägg till klientens slutentitet i rollen
 
 ### "404 Not Found — verify base_url points to the EJBCA REST API root"
 
