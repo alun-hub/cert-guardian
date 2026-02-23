@@ -1,6 +1,6 @@
 # Certificate Guardian - Web Application
 
-Full-featured web application for monitoring TLS certificate expiry with a modern React frontend and FastAPI backend.
+Full-featured web application for monitoring TLS certificate expiry, SSH security, HTTP headers, and OIDC/SAML authentication configuration with a modern React frontend and FastAPI backend.
 
 ## Features
 
@@ -8,7 +8,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Real-time Statistics** - Total certificates, expiring 7/30/90 dagar, self-signed, untrusted
 - **Expiry Timeline Chart** - Visualize when certificates expire over time
 - **Urgent Alerts** - Quick view of certificates expiring soon
-- **One-Click Scanning** - Trigger manual scans from the UI (editor+, med bekräftelsedialog)
+- **Non-Blocking Scan All** - Trigger manual scans from the UI; button shows spinner while scanning runs in background — all other pages stay accessible
 - **TLS hygiene** - Indikatorer för weak keys, legacy TLS, senaste certförändring
 
 ### Certificates View
@@ -22,12 +22,14 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Badges** - Snabba varningsflaggor (hostname mismatch, weak signature, OCSP/CRL saknas, m.m.)
 
 ### Endpoints Management
+- **Multi-Protocol Types** - Endpoints classified as HTTPS (blue), SSH (purple), or LDAPS (teal) based on port
 - **Add/Remove Endpoints** - Full CRUD operations (editor+)
 - **Per-Endpoint Scanning** - Scan individual endpoints on demand
 - **Criticality Levels** - Mark endpoints as low/medium/high/critical
 - **Owner Assignment** - Track responsibility for each endpoint
-- **Recent Scan Trend** - Mini-graf med senaste scanningsstatus
-- **Per-Endpoint Webhooks** - Configure specific Mattermost webhook per endpoint (URL maskeras i listan, full URL synlig för ägare/admin)
+- **Recent Scan Trend** - Mini-graf med senaste scanningsstatus (works for SSH endpoints too)
+- **Per-Endpoint Webhooks** - Configure specific Mattermost webhook per endpoint (hidden for SSH endpoints, URL maskeras i listan, full URL synlig för ägare/admin)
+- **SSH Expires N/A** - SSH endpoints show N/A in the Expires column (no TLS certificate)
 - **Search & Filter** - Search by host/owner, filter by criticality, expiry, webhook status
 - **Sortable Columns** - Sort by any column
 - **Ägarskap** - Endpoints kan endast ändras/raderas av skaparen eller admin
@@ -43,6 +45,13 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **Rescan** - Starta om befintliga sweeps
 - **Ägarskap** - Sweeps kan endast ändras/raderas av skaparen eller admin
 
+### Security Page
+- **TLS/HTTPS Tab** - Security findings for all HTTPS and LDAPS endpoints (cert, tls, headers, dns, auth categories)
+- **SSH Tab** - Security findings for all SSH endpoints (host key and KEX algorithm checks)
+- **Certifikatproblem Tab** - Overview of all certificate trust/expiry issues
+- **HTTP Headers Tab** - Header grades, scores, and additional checks (server disclosure, CORS wildcard, TRACE)
+- **OIDC/SAML Findings** - Auth security checks shown under TLS/HTTPS tab, category "OIDC/SAML"
+
 ### Settings
 - **Custom CA Management** - Add trusted root CAs for internal PKI (editor+)
 - **CA Upload** - Upload PEM files or paste certificate data
@@ -52,7 +61,7 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 - **SIEM Forwarding** - Stdout/Syslog/Beats med TLS + test-event (admin)
 
 ### About
-- **Feature Overview** - Beskrivning av vad appen gör och vilka signaler som spåras
+- **Feature Overview** - Beskrivning av alla protokoll, skanningar, finding-kategorier och säkerhetsanalys
 
 ### User Management (Admin)
 - **User List** - View all users with roles
@@ -105,7 +114,13 @@ Full-featured web application for monitoring TLS certificate expiry with a moder
 |  +----------------------------------------------+  |
 |  |  Database Layer (SQLite)                     |  |
 |  +----------------------------------------------+  |
-|  |  TLS Scanner + Notifier                      |  |
+|  |  Scanners (dispatched by port):              |  |
+|  |    port 22  → SSH Scanner                   |  |
+|  |    port 636 → TLS + LDAP Scanner            |  |
+|  |    other    → TLS + HTTP Headers            |  |
+|  |               + OIDC/SAML Scanner           |  |
+|  +----------------------------------------------+  |
+|  |  TLS Analyzer (findings engine)             |  |
 |  +----------------------------------------------+  |
 +-----------------------------------------------------+
 ```

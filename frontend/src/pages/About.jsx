@@ -1,4 +1,4 @@
-import { Shield, Lock, Globe, AlertTriangle, Info } from 'lucide-react'
+import { Shield, Lock, Globe, AlertTriangle, Info, Terminal, Database, Key } from 'lucide-react'
 
 export default function About() {
   return (
@@ -6,24 +6,89 @@ export default function About() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900">About Certificate Guardian</h1>
         <p className="text-gray-500 mt-1">
-          TLS certificate monitoring and HTTP security header analysis for your infrastructure.
+          TLS, SSH och HTTP-säkerhetsanalys för din infrastruktur.
         </p>
       </div>
 
       {/* Overview */}
       <Section icon={<Info className="w-5 h-5 text-blue-500" />} title="What It Does">
         <p>
-          Certificate Guardian continuously scans your endpoints to monitor TLS certificates and
-          analyse HTTP security headers. It detects expiring certificates, trust issues, weak
-          cryptography, and missing security headers &mdash; then surfaces actionable findings in a
-          single dashboard. Notifications are sent via Mattermost webhooks when certificates approach
-          expiry or trust problems are detected.
+          Certificate Guardian continuously scans your endpoints to monitor TLS certificates,
+          SSH host key security, HTTP security headers, and authentication configuration (OIDC/SAML).
+          It detects expiring certificates, trust issues, weak cryptography, missing security headers,
+          and authentication misconfigurations &mdash; then surfaces actionable findings in a single
+          dashboard. Notifications are sent via Mattermost webhooks when certificates approach expiry
+          or security problems are detected.
+        </p>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="border border-blue-200 bg-blue-50 rounded-lg p-3">
+            <span className="font-semibold text-blue-800 text-sm">HTTPS / TLS</span>
+            <p className="text-xs text-gray-600 mt-1">Certificate validation, HTTP security headers, OIDC/SAML auth checks</p>
+          </div>
+          <div className="border border-purple-200 bg-purple-50 rounded-lg p-3">
+            <span className="font-semibold text-purple-800 text-sm">SSH</span>
+            <p className="text-xs text-gray-600 mt-1">Host key algorithms, key exchange algorithms, weak cipher detection</p>
+          </div>
+          <div className="border border-teal-200 bg-teal-50 rounded-lg p-3">
+            <span className="font-semibold text-teal-800 text-sm">LDAPS</span>
+            <p className="text-xs text-gray-600 mt-1">TLS certificate + LDAP anonymous bind and plaintext availability checks</p>
+          </div>
+        </div>
+      </Section>
+
+      {/* Multi-Protocol Endpoints */}
+      <Section icon={<Database className="w-5 h-5 text-teal-600" />} title="Multi-Protocol Endpoint Types">
+        <p>
+          Endpoints are automatically classified by port number. Each type triggers a different
+          scanner and is displayed with a distinct badge in the Endpoints list.
+        </p>
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm border border-gray-200 rounded">
+            <thead className="bg-gray-50 text-left">
+              <tr>
+                <th className="px-4 py-2 font-medium text-gray-600">Badge</th>
+                <th className="px-4 py-2 font-medium text-gray-600">Port</th>
+                <th className="px-4 py-2 font-medium text-gray-600">Scanner</th>
+                <th className="px-4 py-2 font-medium text-gray-600">What is checked</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              <tr>
+                <td className="px-4 py-2">
+                  <span className="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5 rounded">HTTPS</span>
+                </td>
+                <td className="px-4 py-2 font-mono text-gray-600">443 (and others)</td>
+                <td className="px-4 py-2">TLS + HTTP headers + OIDC/SAML</td>
+                <td className="px-4 py-2 text-gray-600">Certificate chain, header grades, auth config, CAA records</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2">
+                  <span className="bg-purple-100 text-purple-700 text-xs font-medium px-2 py-0.5 rounded">SSH</span>
+                </td>
+                <td className="px-4 py-2 font-mono text-gray-600">22</td>
+                <td className="px-4 py-2">SSH host key scanner</td>
+                <td className="px-4 py-2 text-gray-600">Host key algorithms, KEX algorithms, weak cipher detection</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2">
+                  <span className="bg-teal-100 text-teal-700 text-xs font-medium px-2 py-0.5 rounded">LDAPS</span>
+                </td>
+                <td className="px-4 py-2 font-mono text-gray-600">636</td>
+                <td className="px-4 py-2">TLS + LDAP probe</td>
+                <td className="px-4 py-2 text-gray-600">Certificate chain (same as HTTPS) + anonymous bind + LDAP plaintext availability on port 389</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-gray-500 mt-3">
+          When adding an SSH endpoint, the webhook field is hidden (not applicable). The Expires
+          column shows &ldquo;N/A&rdquo; for SSH endpoints since there is no TLS certificate.
         </p>
       </Section>
 
       {/* TLS Certificate Monitoring */}
       <Section icon={<Lock className="w-5 h-5 text-green-600" />} title="TLS Certificate Monitoring">
-        <p>Every scan cycle collects the following for each endpoint:</p>
+        <p>Every TLS/HTTPS scan cycle collects the following for each endpoint:</p>
         <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
           <Item label="Identity" desc="Subject, issuer, serial number, SAN entries" />
           <Item label="Validity" desc="Not-before / not-after dates, days until expiry" />
@@ -35,6 +100,8 @@ export default function About() {
           <Item label="Revocation" desc="OCSP responder and CRL distribution point presence" />
           <Item label="Key Usage" desc="EKU Server Auth, Digital Signature, Key Encipherment" />
           <Item label="Trust Status" desc="Self-signed detection, CA chain validation, validation errors" />
+          <Item label="CAA Records" desc="Certification Authority Authorization DNS records" />
+          <Item label="Redirect" desc="HTTP-to-HTTPS redirect detection" />
         </div>
 
         <h4 className="font-semibold text-gray-800 mt-5 mb-2">Dashboard Security Signals</h4>
@@ -51,13 +118,34 @@ export default function About() {
         </div>
       </Section>
 
+      {/* SSH Security Analysis */}
+      <Section icon={<Terminal className="w-5 h-5 text-purple-600" />} title="SSH Security Analysis">
+        <p>
+          For endpoints on port 22, Certificate Guardian connects via TCP and reads the SSH banner
+          and host key / key exchange algorithm advertisements. No authentication is performed &mdash;
+          the probe is read-only.
+        </p>
+        <h4 className="font-semibold text-gray-800 mt-4 mb-2">Findings Detected</h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+          <Item label="SSH_OK" desc="Server reachable, modern algorithms only" />
+          <Item label="SSH_WEAK_KEX" desc="Weak key exchange algorithm advertised (e.g. diffie-hellman-group1-sha1)" />
+          <Item label="SSH_WEAK_HOST_KEY" desc="Weak host key type (DSA, RSA &lt; 2048 bits, ECDSA)" />
+          <Item label="SSH_LEGACY_VERSION" desc="SSHv1 detected" />
+          <Item label="SSH_UNREACHABLE" desc="TCP connection refused or timed out" />
+        </div>
+        <p className="text-xs text-gray-500 mt-3">
+          SSH findings are shown on a dedicated &ldquo;SSH&rdquo; tab on the Security page,
+          separate from TLS/HTTPS findings.
+        </p>
+      </Section>
+
       {/* HTTP Header Security */}
       <Section icon={<Globe className="w-5 h-5 text-purple-600" />} title="HTTP Security Header Analysis">
         <p>
           After each TLS scan, Certificate Guardian also performs an HTTPS request to analyse
-          the response's security headers. Each endpoint receives a score (0&ndash;100) and a
-          letter grade (A&ndash;F). Results are shown on the Dashboard, the Security page's
-          &ldquo;HTTP Headers&rdquo; tab, and in each certificate's detail view.
+          the response&rsquo;s security headers. Each endpoint receives a score (0&ndash;100) and a
+          letter grade (A&ndash;F). Results are shown on the Dashboard, the Security page&rsquo;s
+          &ldquo;HTTP Headers&rdquo; tab, and in each certificate&rsquo;s detail view.
         </p>
 
         <h4 className="font-semibold text-gray-800 mt-5 mb-2">Scoring Breakdown</h4>
@@ -120,6 +208,78 @@ export default function About() {
         </div>
         <p className="text-xs text-gray-500 mt-2">
           The Dashboard &ldquo;Header Issues&rdquo; card counts endpoints with grade D or F.
+        </p>
+
+        <h4 className="font-semibold text-gray-800 mt-5 mb-2">Additional HTTP Security Checks</h4>
+        <p className="mb-3">
+          The following checks do not affect the header score but generate findings in the
+          &ldquo;HTTP Headers&rdquo; tab on the Security page:
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="border border-gray-200 rounded-lg p-3">
+            <span className="font-semibold text-sm text-gray-800">Server Version Disclosure</span>
+            <p className="text-xs text-gray-600 mt-1">
+              Detects when the <code className="bg-gray-100 px-1 rounded">Server</code> or{' '}
+              <code className="bg-gray-100 px-1 rounded">X-Powered-By</code> header reveals software
+              version strings (e.g. <em>nginx/1.24.0</em>). Severity: <span className="text-yellow-700 font-medium">Low</span>.
+            </p>
+          </div>
+          <div className="border border-gray-200 rounded-lg p-3">
+            <span className="font-semibold text-sm text-gray-800">CORS Wildcard</span>
+            <p className="text-xs text-gray-600 mt-1">
+              Flags when <code className="bg-gray-100 px-1 rounded">Access-Control-Allow-Origin: *</code>{' '}
+              is set on an authenticated endpoint, allowing any origin to read responses.
+              Severity: <span className="text-orange-700 font-medium">Medium</span>.
+            </p>
+          </div>
+          <div className="border border-gray-200 rounded-lg p-3">
+            <span className="font-semibold text-sm text-gray-800">HTTP TRACE Enabled</span>
+            <p className="text-xs text-gray-600 mt-1">
+              Sends a <code className="bg-gray-100 px-1 rounded">TRACE</code> request and flags the
+              endpoint if the server responds with HTTP 200. TRACE can expose credentials in proxied
+              environments. Severity: <span className="text-yellow-700 font-medium">Low</span>.
+            </p>
+          </div>
+        </div>
+      </Section>
+
+      {/* OIDC/SAML */}
+      <Section icon={<Key className="w-5 h-5 text-indigo-600" />} title="OIDC / SAML Authentication Security">
+        <p>
+          For HTTPS endpoints, Certificate Guardian auto-discovers OpenID Connect and SAML
+          configuration and checks for known security misconfigurations. No credentials are
+          required &mdash; all checks are based on publicly accessible metadata.
+        </p>
+
+        <h4 className="font-semibold text-gray-800 mt-4 mb-2">OIDC Discovery</h4>
+        <p className="mb-2">
+          Probes <code className="bg-gray-100 px-1 rounded text-xs">/.well-known/openid-configuration</code> and{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">/.well-known/oauth-authorization-server</code>.
+          When an OIDC provider is found, the following are checked:
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 mb-4">
+          <Item label="None Algorithm" desc="id_token_signing_alg_values_supported includes 'none' (critical — tokens could be unsigned)" />
+          <Item label="HTTP Issuer" desc="Issuer URL uses http:// instead of https:// (high)" />
+          <Item label="Implicit Flow" desc="token / id_token response types advertised (medium — exposes tokens in URL)" />
+          <Item label="Password Grant" desc="password grant type supported (medium — bypasses MFA)" />
+          <Item label="No PKCE" desc="code_challenge_methods_supported is absent (low — PKCE recommended for public clients)" />
+        </div>
+
+        <h4 className="font-semibold text-gray-800 mb-2">SAML Metadata Discovery</h4>
+        <p className="mb-2">
+          Probes common SAML metadata paths (e.g.{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">/saml/metadata</code>,{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">/FederationMetadata/2007-06/FederationMetadata.xml</code>,{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">/Shibboleth.sso/Metadata</code>).
+          When SAML metadata is found:
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+          <Item label="No Signing Certificate" desc="Metadata contains no X.509 signing certificate (medium — responses cannot be verified)" />
+          <Item label="Signing Cert Expiring" desc="Signing certificate expires within 30 days (high) or 14 days (critical)" />
+        </div>
+        <p className="text-xs text-gray-500 mt-3">
+          OIDC and SAML findings appear in the &ldquo;TLS/HTTPS&rdquo; tab on the Security page
+          under the <em>OIDC/SAML</em> category.
         </p>
       </Section>
 
@@ -189,11 +349,15 @@ export default function About() {
       <Section icon={<Shield className="w-5 h-5 text-blue-600" />} title="Scans &amp; Scheduling">
         <p>
           The scanner container runs on a configurable interval (default: 1 hour). Each cycle
-          connects to every registered endpoint, performs a TLS handshake to collect certificate
-          data, and then makes an HTTPS GET request to analyse response headers.
+          dispatches each endpoint to the correct scanner based on port, then stores results
+          and sends notifications as needed.
         </p>
         <ul className="mt-3 space-y-2">
           <li>Manual scans can be triggered from the Dashboard (&ldquo;Scan All&rdquo;) or per-endpoint from the Endpoints page.</li>
+          <li>
+            &ldquo;Scan All&rdquo; runs as a background job &mdash; the dashboard stays responsive and shows
+            a spinner on the button while scanning is in progress. Other pages remain accessible.
+          </li>
           <li>The scan interval can be changed in Settings &gt; Scanner (admin only, 10 s &ndash; 86 400 s).</li>
           <li>Network sweeps discover new endpoints by scanning IP ranges and port lists.</li>
           <li>Orphaned certificates (no longer returned by any endpoint) are automatically cleaned up after each scan cycle.</li>
@@ -203,8 +367,9 @@ export default function About() {
       {/* Notifications */}
       <Section title="Notifications">
         <p>
-          Alerts are sent via Mattermost incoming webhooks. Each endpoint can have its own
-          webhook URL, or fall back to the global webhook configured in config.yaml.
+          Alerts are sent via Mattermost incoming webhooks. Each HTTPS/LDAPS endpoint can have its
+          own webhook URL, or fall back to the global webhook configured in config.yaml.
+          SSH endpoints do not support per-endpoint webhooks.
         </p>
         <ul className="mt-3 space-y-2">
           <li>Expiry alerts fire at configurable day thresholds (e.g. 90, 60, 30, 14, 7, 1).</li>
@@ -274,7 +439,7 @@ export default function About() {
 
       {/* Footer */}
       <div className="text-center text-xs text-gray-400 py-4">
-        Certificate Guardian &mdash; TLS certificate and HTTP header security monitoring
+        Certificate Guardian &mdash; TLS, SSH och HTTP-säkerhetsövervakning
       </div>
     </div>
   )

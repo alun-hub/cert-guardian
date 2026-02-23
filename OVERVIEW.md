@@ -2,13 +2,15 @@
 
 ## 📦 Vad är det här?
 
-Ett säkerhetsverktyg som automatiskt övervakar TLS-certifikat på dina endpoints och skickar varningar till Mattermost innan de går ut. Perfekt för att undvika den klassiska "shit, certifikatet gick ut och nu är allt nere!"-situationen.
+Ett säkerhetsverktyg som automatiskt övervakar TLS-certifikat, SSH-säkerhet, HTTP-headers och OIDC/SAML-konfiguration på dina endpoints — och skickar varningar till Mattermost när problem upptäcks. Perfekt för att undvika den klassiska "shit, certifikatet gick ut och nu är allt nere!"-situationen.
 
 ## 🎯 Kärnfunktioner
 
-✅ **Automatisk Scanning**
-- Scannar TLS endpoints varje timme (konfigurerbart)
-- Hämtar cert metadata (subject, issuer, expiry date, fingerprint)
+✅ **Multi-protokoll Scanning**
+- **HTTPS/TLS** (port 443 och andra) — certifikatkedja, HTTP-headers, OIDC/SAML
+- **SSH** (port 22) — host key-algoritmer, KEX-algoritmer, svaga chiffer
+- **LDAPS** (port 636) — TLS-cert + LDAP anonym bind och plaintextåtkomst
+- Scannar varje timme (konfigurerbart); manuell "Scan All" körs i bakgrunden utan att blockera UI
 - Stödjer SNI (Server Name Indication)
 - **Validerar mot system CA store**
 - **Detekterar self-signed certifikat**
@@ -46,7 +48,12 @@ Ett säkerhetsverktyg som automatiskt övervakar TLS-certifikat på dina endpoin
 cert-guardian/
 ├── src/
 │   ├── main.py           # Huvudapplikation
-│   ├── scanner.py        # TLS scanner
+│   ├── scanner.py        # TLS scanner (CertInfo dataclass)
+│   ├── http_scanner.py   # HTTP header scanner (scoring + extra checks)
+│   ├── ssh_scanner.py    # SSH host key / KEX scanner
+│   ├── ldap_scanner.py   # LDAP anonymous bind + plaintext check
+│   ├── oidc_scanner.py   # OIDC/SAML discovery och säkerhetskontroller
+│   ├── tls_analyzer.py   # Findings engine (alla finding-kategorier)
 │   ├── network_scanner.py # Network sweep scanner
 │   ├── notifier.py       # Mattermost integration
 │   ├── siem_client.py    # SIEM forwarding (syslog/beats)
@@ -250,17 +257,25 @@ sqlite3 data/certificates.db \
   "SELECT COUNT(*) FROM certificates"
 ```
 
+## 🔐 Säkerhetsanalyser (finding-kategorier)
+
+| Kategori | Protokoll | Exempel på findings |
+|----------|-----------|-------------------|
+| `cert` | TLS/LDAPS | Self-signed, untrusted CA, hostname mismatch, weak key, expiring |
+| `tls` | TLS/LDAPS | Legacy TLS 1.0/1.1, weak cipher, chain too short |
+| `headers` | HTTPS | Missing HSTS/CSP/X-Frame-Options, server version disclosure, CORS wildcard, HTTP TRACE |
+| `dns` | HTTPS | Missing CAA records |
+| `ssh` | SSH | Weak KEX algorithm, weak host key type, SSHv1 |
+| `ldap` | LDAPS | Anonymous bind allowed, plaintext LDAP accessible |
+| `auth` | HTTPS | OIDC none-algorithm, HTTP issuer, implicit flow, password grant, no PKCE; SAML no signing cert, expiring signing cert |
+
 ## 🚀 Framtida Förbättringar
 
 Se ENHANCEMENTS.md för detaljerad lista, men här är highlights:
 
 - **Filesystem scanning** - scanna .pem/.crt filer på disk
-- **LDAP/AD integration** - user certificates i Active Directory  
 - **Auto-renewal** - Let's Encrypt integration
-- **REST API** - exponera data för andra system
-- **Web Dashboard** - visualisering och control panel
 - **Multi-channel** - Email, Slack, Teams notifications
-- **Chain validation** - hela cert chain, inte bara leaf
 
 ## 💡 Tips & Tricks
 
@@ -304,5 +319,5 @@ MIT License - använd fritt i din organisation.
 ---
 
 **Skapad av:** AI/Security Team
-**Version:** 1.2.0
-**Datum:** 2026-02-04
+**Version:** 1.3.0
+**Datum:** 2026-02-23
