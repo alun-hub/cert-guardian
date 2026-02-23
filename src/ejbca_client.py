@@ -105,11 +105,18 @@ class EjbcaClient:
             n = len(cas)
             return True, f"{n} CA{'s' if n != 1 else ''} found"
         except requests.exceptions.SSLError as e:
-            return False, f"TLS error: {e}"
+            return False, (
+                f"TLS error: {e} — provide ca_pem with EJBCA's CA certificate "
+                f"or set verify_tls: false"
+            )
         except requests.exceptions.ConnectionError as e:
-            return False, f"Connection failed: {e}"
+            return False, (
+                f"Connection failed: {e} — check host, port and firewall rules"
+            )
         except requests.exceptions.Timeout:
-            return False, "Connection timed out"
+            return False, "Connection timed out — check network connectivity and EJBCA host/port"
+        except requests.exceptions.HTTPError as e:
+            return False, self._http_error_message(e)
         except Exception as e:
             return False, str(e)
 
@@ -129,7 +136,8 @@ class EjbcaClient:
         """Fetch all active certificates from EJBCA.
 
         Tries the Enterprise v2 endpoint first (paginated), then falls back
-        to the v1 endpoint (single-page, Community-compatible).
+        lazily to the v1 endpoint (single-page, Community-compatible) when
+        v2 returns 404/405/501.
 
         Args:
             ca_dn_filter: Comma-separated CA DNs to filter by (empty = all CAs).
@@ -141,47 +149,65 @@ class EjbcaClient:
         ca_filters = [dn.strip() for dn in ca_dn_filter.split(',') if dn.strip()] \
             if ca_dn_filter else []
 
-        # Detect API version: try v2 (Enterprise) first, fall back to v1 (Community)
         v2_url = f"{self.base_url}/v2/certificate/search"
         v1_url = f"{self.base_url}/v1/certificate/search"
-        search_url, use_v2 = self._detect_search_endpoint(v2_url, v1_url)
 
         all_certs: List[EjbcaCertificate] = []
 
         if ca_filters:
             for ca_dn in ca_filters:
                 all_certs.extend(
-                    self._fetch_pages(search_url, page_size, max_total, ca_dn, use_v2)
+                    self._fetch_with_fallback(v2_url, v1_url, page_size, max_total, ca_dn)
                 )
         else:
             all_certs.extend(
-                self._fetch_pages(search_url, page_size, max_total, None, use_v2)
+                self._fetch_with_fallback(v2_url, v1_url, page_size, max_total, None)
             )
 
         return all_certs
 
-    def _detect_search_endpoint(self, v2_url: str, v1_url: str) -> tuple:
-        """Probe which search endpoint is available.
-
-        Returns (url, use_v2_pagination) tuple.
-        v2 (Enterprise) supports pagination via current_page (1-indexed).
-        v1 (Community/older) uses max_number_of_results only, no cursor.
-        """
-        # Probe v2 with an empty criteria list (max 0 results) to check availability
+    def _fetch_with_fallback(self, v2_url: str, v1_url: str, page_size: int,
+                             max_total: int, ca_dn: Optional[str]) -> List[EjbcaCertificate]:
+        """Try v2 (Enterprise, paginated); fall back to v1 (Community) on 404/405/501."""
         try:
-            probe = self.session.post(
-                v2_url,
-                json={"max_number_of_results": 1, "current_page": 1, "criteria": []},
-                timeout=self.timeout,
-            )
-            if probe.status_code not in (404, 405, 501):
-                logger.debug("Using EJBCA v2 certificate search (Enterprise/paginated)")
-                return v2_url, True
-        except Exception:
-            pass
+            return self._fetch_pages(v2_url, page_size, max_total, ca_dn, use_v2=True)
+        except requests.exceptions.HTTPError as exc:
+            resp = exc.response
+            if resp is not None and resp.status_code in (404, 405, 501):
+                logger.info(
+                    "EJBCA v2 search not available (HTTP %s) — "
+                    "falling back to v1 (Community/older Enterprise)",
+                    resp.status_code,
+                )
+                return self._fetch_pages(v1_url, page_size, max_total, ca_dn, use_v2=False)
+            raise RuntimeError(self._http_error_message(exc)) from exc
 
-        logger.debug("Using EJBCA v1 certificate search (Community/single-page)")
-        return v1_url, False
+    def _http_error_message(self, exc: requests.exceptions.HTTPError) -> str:
+        """Translate an HTTPError into an actionable error message."""
+        resp = exc.response
+        status = resp.status_code if resp is not None else None
+        if status == 401:
+            return (
+                "401 Unauthorized — verify that the client certificate or API key is valid "
+                "and has not expired"
+            )
+        if status == 403:
+            return (
+                "403 Forbidden — ensure the client has the 'REST Certificate Management' "
+                "role in EJBCA (SuperAdmin or a role with REST access)"
+            )
+        if status == 404:
+            return (
+                "404 Not Found — verify base_url points to the EJBCA REST API root, e.g. "
+                "https://ejbca.example.com/ejbca/ejbca-rest-api  or "
+                "https://ejbca.example.com:8443/ejbca-rest-api"
+            )
+        if status == 405:
+            return (
+                "405 Method Not Allowed — check that the EJBCA REST API module "
+                "(ejbca-rest-api) is installed and enabled"
+            )
+        return f"HTTP {status}: {exc}"
 
     def _fetch_pages(self, url: str, page_size: int, max_total: int,
                      ca_dn: Optional[str], use_v2: bool) -> List[EjbcaCertificate]:
