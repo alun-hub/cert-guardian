@@ -545,6 +545,77 @@ def analyze_endpoint(row: dict) -> List[SecurityFinding]:
         ))
 
     # ------------------------------------------------------------------ #
+    # Server version disclosure
+    # ------------------------------------------------------------------ #
+
+    server_header = row.get("server_header")
+    if server_header:
+        findings.append(SecurityFinding(
+            finding_id="SERVER_VERSION_DISCLOSURE",
+            severity="low",
+            category="headers",
+            title="Server-header avslöjar mjukvaruversion",
+            description=(
+                "Servern skickar en Server- eller X-Powered-By-header som innehåller "
+                "mjukvarunamn och versionsnummer. Detta hjälper angripare att identifiera "
+                "känd sårbar programvara och rikta attacker mot specifika CVE:er."
+            ),
+            recommendation=(
+                "Dölj eller generalisera Server-headern. Exempel för nginx: "
+                "server_tokens off;  För Apache: ServerTokens Prod; ServerSignature Off"
+            ),
+            detail=f"Header-värde: {server_header}",
+        ))
+
+    # ------------------------------------------------------------------ #
+    # CORS wildcard
+    # ------------------------------------------------------------------ #
+
+    cors_wildcard = row.get("cors_wildcard")
+    if cors_wildcard == 1:
+        findings.append(SecurityFinding(
+            finding_id="CORS_WILDCARD",
+            severity="medium",
+            category="headers",
+            title="CORS tillåter alla ursprung (Access-Control-Allow-Origin: *)",
+            description=(
+                "Servern returnerar Access-Control-Allow-Origin: * vilket innebär att "
+                "vilken webbplats som helst kan skicka cross-origin-förfrågningar och läsa "
+                "svaren. För API:er med autentisering eller känslig data kan detta "
+                "möjliggöra att angripares sidor läser användardata."
+            ),
+            recommendation=(
+                "Begränsa CORS till specifika betrodda ursprung: "
+                "Access-Control-Allow-Origin: https://app.example.com  "
+                "Använd aldrig * tillsammans med Access-Control-Allow-Credentials: true."
+            ),
+        ))
+
+    # ------------------------------------------------------------------ #
+    # HTTP TRACE method
+    # ------------------------------------------------------------------ #
+
+    trace_enabled = row.get("trace_enabled")
+    if trace_enabled == 1:
+        findings.append(SecurityFinding(
+            finding_id="HTTP_TRACE_ENABLED",
+            severity="low",
+            category="headers",
+            title="HTTP TRACE-metoden är aktiverad",
+            description=(
+                "Servern svarar på HTTP TRACE-förfrågningar med 200 OK. "
+                "TRACE kan användas i Cross-Site Tracing (XST)-attacker för att "
+                "stjäla autentiseringscookies och headers via JavaScript, "
+                "i kombination med en XSS-sårbarhet."
+            ),
+            recommendation=(
+                "Inaktivera TRACE-metoden. Exempel för Apache: TraceEnable Off  "
+                "För nginx är TRACE inte aktiverat som standard — kontrollera eventuella "
+                "proxy-konfigurationer."
+            ),
+        ))
+
+    # ------------------------------------------------------------------ #
     # LDAP findings (port 636 endpoints)
     # ------------------------------------------------------------------ #
 

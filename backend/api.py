@@ -1232,46 +1232,64 @@ async def get_endpoints(
     # Add last scan info for each endpoint
     cursor = db.conn.cursor()
     for endpoint in endpoints:
-        # Get status/time from latest scan (any status), but get cert data
-        # from the latest *successful* scan so a failed scan doesn't wipe
-        # out the days_until_expiry display or show "0 days".
-        cursor.execute("""
-            SELECT
-                latest.scanned_at,
-                latest.status,
-                c.not_after,
-                julianday(c.not_after) - julianday('now') AS days_until_expiry
-            FROM (
-                SELECT scanned_at, status
-                FROM certificate_scans
-                WHERE endpoint_id = ?
-                ORDER BY scanned_at DESC
-                LIMIT 1
-            ) latest
-            LEFT JOIN (
-                SELECT certificate_id
-                FROM certificate_scans
-                WHERE endpoint_id = ? AND status = 'success'
-                ORDER BY scanned_at DESC
-                LIMIT 1
-            ) last_ok ON 1=1
-            LEFT JOIN certificates c ON last_ok.certificate_id = c.id
-        """, (endpoint['id'], endpoint['id'],))
+        port = endpoint['port']
+        endpoint['endpoint_type'] = 'ssh' if port == 22 else ('ldaps' if port == 636 else 'tls')
 
-        last_scan = cursor.fetchone()
-        if last_scan:
-            endpoint['last_scan'] = dict(last_scan)
+        if port == 22:
+            cursor.execute("""
+                SELECT scanned_at,
+                       CASE WHEN scan_error IS NULL THEN 'success' ELSE 'failed' END AS status
+                FROM ssh_scans WHERE endpoint_id = ?
+                ORDER BY scanned_at DESC LIMIT 1
+            """, (endpoint['id'],))
+            last_scan = cursor.fetchone()
+            endpoint['last_scan'] = dict(last_scan) if last_scan else None
+
+            cursor.execute("""
+                SELECT scanned_at,
+                       CASE WHEN scan_error IS NULL THEN 'success' ELSE 'failed' END AS status
+                FROM ssh_scans WHERE endpoint_id = ?
+                ORDER BY scanned_at DESC LIMIT 12
+            """, (endpoint['id'],))
+            endpoint['recent_scans'] = [dict(s) for s in cursor.fetchall()]
         else:
-            endpoint['last_scan'] = None
+            # Get status/time from latest scan (any status), but get cert data
+            # from the latest *successful* scan so a failed scan doesn't wipe
+            # out the days_until_expiry display or show "0 days".
+            cursor.execute("""
+                SELECT
+                    latest.scanned_at,
+                    latest.status,
+                    c.not_after,
+                    julianday(c.not_after) - julianday('now') AS days_until_expiry
+                FROM (
+                    SELECT scanned_at, status
+                    FROM certificate_scans
+                    WHERE endpoint_id = ?
+                    ORDER BY scanned_at DESC
+                    LIMIT 1
+                ) latest
+                LEFT JOIN (
+                    SELECT certificate_id
+                    FROM certificate_scans
+                    WHERE endpoint_id = ? AND status = 'success'
+                    ORDER BY scanned_at DESC
+                    LIMIT 1
+                ) last_ok ON 1=1
+                LEFT JOIN certificates c ON last_ok.certificate_id = c.id
+            """, (endpoint['id'], endpoint['id'],))
 
-        cursor.execute("""
-            SELECT cs.scanned_at, cs.status
-            FROM certificate_scans cs
-            WHERE cs.endpoint_id = ?
-            ORDER BY cs.scanned_at DESC
-            LIMIT 12
-        """, (endpoint['id'],))
-        endpoint['recent_scans'] = [dict(scan) for scan in cursor.fetchall()]
+            last_scan = cursor.fetchone()
+            endpoint['last_scan'] = dict(last_scan) if last_scan else None
+
+            cursor.execute("""
+                SELECT cs.scanned_at, cs.status
+                FROM certificate_scans cs
+                WHERE cs.endpoint_id = ?
+                ORDER BY cs.scanned_at DESC
+                LIMIT 12
+            """, (endpoint['id'],))
+            endpoint['recent_scans'] = [dict(scan) for scan in cursor.fetchall()]
 
         # Mask webhook URL — only owner or admin sees full URL
         endpoint['webhook_url_masked'] = mask_webhook_url(endpoint.get('webhook_url'))
@@ -1314,6 +1332,18 @@ async def get_endpoint_webhook(
     return {"webhook_url": endpoint_dict.get('webhook_url')}
 
 
+def _probe_ssh(host: str, port: int, timeout: int = 3) -> Optional[str]:
+    """Try TCP connection to SSH port. Return None on success, error string on failure."""
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        return None
+    except socket.timeout:
+        return "Connection timed out"
+    except OSError as e:
+        return str(e)
+
+
 def _probe_tls(host: str, port: int, timeout: int = 3) -> Optional[str]:
     """Try TLS handshake. Return None on success, error string on failure."""
     try:
@@ -1354,11 +1384,16 @@ async def create_endpoint(
         if existing_dict.get('created_by') and existing_dict['created_by'] != user.email and not user.has_role("admin"):
             raise HTTPException(status_code=403, detail="Only the creator or an admin can modify this endpoint")
 
-    tls_error = _probe_tls(endpoint.host, endpoint.port)
-    if tls_error:
+    if endpoint.port == 22:
+        probe_error = _probe_ssh(endpoint.host, endpoint.port)
+        proto = "SSH"
+    else:
+        probe_error = _probe_tls(endpoint.host, endpoint.port)
+        proto = "TLS"
+    if probe_error:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot establish TLS connection to {endpoint.host}:{endpoint.port} — {tls_error}",
+            detail=f"Cannot connect to {endpoint.host}:{endpoint.port} ({proto}) — {probe_error}",
         )
 
     endpoint_id = db.add_endpoint(
@@ -1554,6 +1589,9 @@ async def trigger_scan(
             caa_records=cert_info.caa_records,
             ldap_anon_bind_allowed=cert_info.ldap_anon_bind_allowed,
             ldap_plain_available=cert_info.ldap_plain_available,
+            server_header=cert_info.server_header,
+            cors_wildcard=cert_info.cors_wildcard,
+            trace_enabled=cert_info.trace_enabled,
         )
         db.add_scan(
             cert_id, endpoint_id, 'success',

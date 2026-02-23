@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle, Loader2, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import { Plus, Server, Trash2, Edit2, Play, Bell, CheckCircle, XCircle, Loader2, Search, ChevronUp, ChevronDown, Terminal, Database, Lock } from 'lucide-react'
 import { endpointService, scanService } from '../services/api'
 import api from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
@@ -283,6 +283,7 @@ export default function Endpoints() {
             <tr>
               <SortHeader label="Host" sortKey="host" />
               <SortHeader label="Port" sortKey="port" />
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
               <SortHeader label="Owner" sortKey="owner" />
               <SortHeader label="Criticality" sortKey="criticality" />
               <SortHeader label="Webhook" sortKey="webhook" />
@@ -294,13 +295,13 @@ export default function Endpoints() {
           <tbody className="divide-y divide-gray-200">
             {loading ? (
               <tr>
-                <td colSpan="8" className="px-4 py-8 text-center">
+                <td colSpan="9" className="px-4 py-8 text-center">
                   <Loader2 className="w-8 h-8 mx-auto animate-spin text-blue-500" />
                 </td>
               </tr>
             ) : filteredEndpoints.length === 0 ? (
               <tr>
-                <td colSpan="8" className="px-4 py-8 text-center text-gray-500">
+                <td colSpan="9" className="px-4 py-8 text-center text-gray-500">
                   <Server className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                   <p>{endpoints.length === 0 ? 'No endpoints configured. Add your first endpoint to start monitoring.' : 'No endpoints match the current filters.'}</p>
                 </td>
@@ -310,12 +311,26 @@ export default function Endpoints() {
                 const lastScan = endpoint.last_scan
                 const daysLeft = lastScan ? Math.floor(lastScan.days_until_expiry) : null
 
+                const endpointType = endpoint.port === 22 ? 'ssh' : endpoint.port === 636 ? 'ldaps' : 'tls'
+                const TYPE_BADGE = {
+                  tls:   { label: 'HTTPS', className: 'bg-blue-100 text-blue-700',   Icon: Lock },
+                  ssh:   { label: 'SSH',   className: 'bg-purple-100 text-purple-700', Icon: Terminal },
+                  ldaps: { label: 'LDAPS', className: 'bg-teal-100 text-teal-700',   Icon: Database },
+                }
+                const badge = TYPE_BADGE[endpointType]
+
                 return (
                   <tr key={endpoint.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
                       <span className="font-medium text-gray-900">{endpoint.host}</span>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">{endpoint.port}</td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded ${badge.className}`}>
+                        <badge.Icon className="w-3 h-3" />
+                        {badge.label}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-600">{endpoint.owner || '-'}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 text-xs font-medium rounded ${getCriticalityColor(endpoint.criticality)}`}>
@@ -335,7 +350,9 @@ export default function Endpoints() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {daysLeft !== null ? (
+                      {endpoint.port === 22 ? (
+                        <span className="text-sm text-gray-400">N/A</span>
+                      ) : daysLeft !== null ? (
                         <span className={`text-sm font-medium ${getExpiryColor(daysLeft)}`}>
                           {daysLeft} days
                         </span>
@@ -530,47 +547,49 @@ function AddEndpointModal({ onClose, onSuccess }) {
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Mattermost Webhook URL
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="url"
-                value={formData.webhook_url}
-                onChange={(e) => {
-                  setFormData({ ...formData, webhook_url: e.target.value })
-                  setWebhookResult(null)
-                }}
-                placeholder="https://mattermost.example.com/hooks/..."
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                type="button"
-                onClick={handleTestWebhook}
-                disabled={!formData.webhook_url || testingWebhook}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
-              >
-                {testingWebhook ? 'Testing...' : 'Test'}
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Optional: Send notifications for this endpoint to a specific webhook
-            </p>
-
-            {webhookResult && (
-              <div className={`mt-2 p-2 rounded text-sm flex items-center gap-2 ${
-                webhookResult.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-              }`}>
-                {webhookResult.success ? (
-                  <CheckCircle className="w-4 h-4" />
-                ) : (
-                  <XCircle className="w-4 h-4" />
-                )}
-                {webhookResult.message}
+          {formData.port !== 22 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Mattermost Webhook URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={formData.webhook_url}
+                  onChange={(e) => {
+                    setFormData({ ...formData, webhook_url: e.target.value })
+                    setWebhookResult(null)
+                  }}
+                  placeholder="https://mattermost.example.com/hooks/..."
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleTestWebhook}
+                  disabled={!formData.webhook_url || testingWebhook}
+                  className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
+                >
+                  {testingWebhook ? 'Testing...' : 'Test'}
+                </button>
               </div>
-            )}
-          </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Optional: Send notifications for this endpoint to a specific webhook
+              </p>
+
+              {webhookResult && (
+                <div className={`mt-2 p-2 rounded text-sm flex items-center gap-2 ${
+                  webhookResult.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {webhookResult.success ? (
+                    <CheckCircle className="w-4 h-4" />
+                  ) : (
+                    <XCircle className="w-4 h-4" />
+                  )}
+                  {webhookResult.message}
+                </div>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">
@@ -699,48 +718,50 @@ function EditEndpointModal({ endpoint, onClose, onSuccess }) {
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Mattermost Webhook URL
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="url"
-                value={formData.webhook_url}
-                disabled={loadingWebhook}
-                onChange={(e) => {
-                  setFormData({ ...formData, webhook_url: e.target.value })
-                  setWebhookResult(null)
-                }}
-                placeholder={loadingWebhook ? 'Loading...' : 'https://mattermost.example.com/hooks/...'}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
-              />
-              <button
-                type="button"
-                onClick={handleTestWebhook}
-                disabled={!formData.webhook_url || testingWebhook || loadingWebhook}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
-              >
-                {testingWebhook ? 'Testing...' : 'Test'}
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Optional: Send notifications for this endpoint to a specific webhook
-            </p>
-
-            {webhookResult && (
-              <div className={`mt-2 p-2 rounded text-sm flex items-center gap-2 ${
-                webhookResult.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-              }`}>
-                {webhookResult.success ? (
-                  <CheckCircle className="w-4 h-4" />
-                ) : (
-                  <XCircle className="w-4 h-4" />
-                )}
-                {webhookResult.message}
+          {endpoint.port !== 22 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Mattermost Webhook URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={formData.webhook_url}
+                  disabled={loadingWebhook}
+                  onChange={(e) => {
+                    setFormData({ ...formData, webhook_url: e.target.value })
+                    setWebhookResult(null)
+                  }}
+                  placeholder={loadingWebhook ? 'Loading...' : 'https://mattermost.example.com/hooks/...'}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                />
+                <button
+                  type="button"
+                  onClick={handleTestWebhook}
+                  disabled={!formData.webhook_url || testingWebhook || loadingWebhook}
+                  className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 text-sm"
+                >
+                  {testingWebhook ? 'Testing...' : 'Test'}
+                </button>
               </div>
-            )}
-          </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Optional: Send notifications for this endpoint to a specific webhook
+              </p>
+
+              {webhookResult && (
+                <div className={`mt-2 p-2 rounded text-sm flex items-center gap-2 ${
+                  webhookResult.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {webhookResult.success ? (
+                    <CheckCircle className="w-4 h-4" />
+                  ) : (
+                    <XCircle className="w-4 h-4" />
+                  )}
+                  {webhookResult.message}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-3 pt-4">
             <button

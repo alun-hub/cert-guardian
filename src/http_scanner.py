@@ -10,6 +10,7 @@ Also checks:
 - HTTP → HTTPS redirect (port 80 redirects to HTTPS)
 - Cookie security flags (Secure, HttpOnly, SameSite)
 """
+import re
 import socket
 import ssl
 import logging
@@ -51,6 +52,10 @@ class HeaderResult:
     redirect_status_code: Optional[int] = None
     # Cookie security flags
     cookie_issues: List[CookieIssue] = field(default_factory=list)
+    # Additional checks
+    server_header: Optional[str] = None       # Raw value if version disclosed
+    cors_wildcard: Optional[bool] = None      # True if ACAO: *
+    trace_enabled: Optional[bool] = None      # True if TRACE returns 200
 
 
 def _score_to_grade(score: int) -> str:
@@ -87,6 +92,9 @@ class HTTPHeaderScanner:
             redirects, status = self._check_http_redirect(host)
             result.redirects_to_https = redirects
             result.redirect_status_code = status
+
+        # TRACE method check
+        result.trace_enabled = self._check_trace(host, port)
 
         return result
 
@@ -176,6 +184,25 @@ class HTTPHeaderScanner:
         except Exception as exc:
             logger.debug("HTTP redirect check failed for %s: %s", host, exc)
             return None, None
+
+    def _check_trace(self, host: str, port: int) -> Optional[bool]:
+        """Send HTTP TRACE request over TLS. Return True if server responds 200."""
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            conn = http.client.HTTPSConnection(host, port, timeout=5, context=ctx)
+            conn.request("TRACE", "/", headers={
+                "Host": host,
+                "User-Agent": "CertGuardian-SecurityScanner/1.0",
+            })
+            resp = conn.getresponse()
+            enabled = resp.status == 200
+            conn.close()
+            return enabled
+        except Exception as exc:
+            logger.debug("TRACE check failed for %s:%d: %s", host, port, exc)
+            return None
 
     def _parse_cookies(self, set_cookies: List[str]) -> List[CookieIssue]:
         """Parse Set-Cookie headers and report missing security flags."""
@@ -301,6 +328,14 @@ class HTTPHeaderScanner:
 
         cookie_issues = self._parse_cookies(set_cookies)
 
+        # Server version disclosure — Server or X-Powered-By containing word/digit
+        server_raw = headers.get("server") or headers.get("x-powered-by")
+        server_header = server_raw if (server_raw and re.search(r'[\w.-]+/\d', server_raw)) else None
+
+        # CORS wildcard
+        acao = headers.get("access-control-allow-origin")
+        cors_wildcard = (acao.strip() == "*") if acao is not None else None
+
         return HeaderResult(
             header_score=score,
             header_grade=_score_to_grade(score),
@@ -310,6 +345,8 @@ class HTTPHeaderScanner:
             csp_has_unsafe_inline=csp_has_unsafe_inline,
             recommendations=recommendations,
             cookie_issues=cookie_issues,
+            server_header=server_header,
+            cors_wildcard=cors_wildcard,
         )
 
     @staticmethod

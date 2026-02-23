@@ -75,6 +75,10 @@ class CertificateInfo:
     # LDAP (port 636 endpoints)
     ldap_anon_bind_allowed: Optional[bool] = None
     ldap_plain_available: Optional[bool] = None
+    # Additional HTTP checks
+    server_header: Optional[str] = None
+    cors_wildcard: Optional[bool] = None
+    trace_enabled: Optional[bool] = None
 
 
 class TLSScanner:
@@ -487,6 +491,9 @@ class TLSScanner:
                                 {"name": c.name, "missing_flags": c.missing_flags}
                                 for c in header_result.cookie_issues
                             ]
+                            cert_info.server_header = header_result.server_header
+                            cert_info.cors_wildcard = header_result.cors_wildcard
+                            cert_info.trace_enabled = header_result.trace_enabled
                     except Exception as e:
                         logger.warning(f"HTTP header scan failed for {host}:{port}: {e}")
 

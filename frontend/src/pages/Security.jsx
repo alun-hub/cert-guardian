@@ -37,7 +37,7 @@ const ENDPOINT_TYPE_BADGE = {
 }
 
 export default function Security() {
-  const [activeTab, setActiveTab] = useState('report')
+  const [activeTab, setActiveTab] = useState('tls')
   const [issues, setIssues] = useState([])
   const [stats, setStats] = useState({ total: 0, self_signed_count: 0, untrusted_count: 0 })
   const [headers, setHeaders] = useState([])
@@ -88,6 +88,8 @@ export default function Security() {
 
   useEffect(() => { loadAll() }, [])
 
+  const tlsReport = report.filter(e => e.endpoint_type !== 'ssh')
+  const sshReport  = report.filter(e => e.endpoint_type === 'ssh')
   const totalFindings = Object.values(reportSummary).reduce((a, b) => a + b, 0)
 
   return (
@@ -97,7 +99,7 @@ export default function Security() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Säkerhetsanalys</h1>
           <p className="text-gray-500 mt-1">
-            TLS-konfiguration, certifikatproblem och HTTP-headers
+            TLS, SSH och HTTP-säkerhetsanalys
           </p>
         </div>
         <button
@@ -129,7 +131,8 @@ export default function Security() {
       <div className="border-b border-gray-200">
         <nav className="flex gap-8">
           {[
-            { id: 'report',  label: `Säkerhetsanalys (${totalFindings})` },
+            { id: 'tls',     label: `TLS/HTTPS (${tlsReport.length})` },
+            { id: 'ssh',     label: `SSH (${sshReport.length})` },
             { id: 'issues',  label: `Certifikatproblem (${stats.total})` },
             { id: 'headers', label: `HTTP-headers (${headers.length})` },
           ].map(({ id, label }) => (
@@ -149,8 +152,11 @@ export default function Security() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'report' && (
-        <ReportTab report={report} loading={reportLoading} />
+      {activeTab === 'tls' && (
+        <ReportTab report={tlsReport} loading={reportLoading} />
+      )}
+      {activeTab === 'ssh' && (
+        <ReportTab report={sshReport} loading={reportLoading} />
       )}
       {activeTab === 'issues' && (
         <IssuesTab issues={issues} loading={loading} />

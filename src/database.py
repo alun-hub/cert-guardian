@@ -145,6 +145,9 @@ class Database:
             "caa_records TEXT",
             "ldap_anon_bind_allowed INTEGER",
             "ldap_plain_available INTEGER",
+            "server_header TEXT",
+            "cors_wildcard INTEGER",
+            "trace_enabled INTEGER",
         ]:
             try:
                 cursor.execute(f"ALTER TABLE certificates ADD COLUMN {col_def}")
@@ -321,7 +324,10 @@ class Database:
                        caa_present: bool = None,
                        caa_records: List[str] = None,
                        ldap_anon_bind_allowed: bool = None,
-                       ldap_plain_available: bool = None) -> int:
+                       ldap_plain_available: bool = None,
+                       server_header: str = None,
+                       cors_wildcard: bool = None,
+                       trace_enabled: bool = None) -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
@@ -344,9 +350,10 @@ class Database:
                 hsts_max_age, csp_has_unsafe_inline, header_recommendations,
                 redirects_to_https, insecure_cookies, caa_present, caa_records,
                 ldap_anon_bind_allowed, ldap_plain_available,
+                server_header, cors_wildcard, trace_enabled,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 subject = excluded.subject,
                 issuer = excluded.issuer,
@@ -382,6 +389,9 @@ class Database:
                 caa_records = excluded.caa_records,
                 ldap_anon_bind_allowed = excluded.ldap_anon_bind_allowed,
                 ldap_plain_available = excluded.ldap_plain_available,
+                server_header = excluded.server_header,
+                cors_wildcard = excluded.cors_wildcard,
+                trace_enabled = excluded.trace_enabled,
                 updated_at = excluded.updated_at
         """, (fingerprint, subject, issuer, not_before, not_after,
               serial_number, san_json, key_type, key_size, signature_algorithm,
@@ -396,6 +406,7 @@ class Database:
               _bool_or_none(redirects_to_https), insecure_cookies_json,
               _bool_or_none(caa_present), caa_records_json,
               _bool_or_none(ldap_anon_bind_allowed), _bool_or_none(ldap_plain_available),
+              server_header, _bool_or_none(cors_wildcard), _bool_or_none(trace_enabled),
               now, now))
         self.conn.commit()
 
@@ -975,6 +986,9 @@ class Database:
                 c.caa_records,
                 c.ldap_anon_bind_allowed,
                 c.ldap_plain_available,
+                c.server_header,
+                c.cors_wildcard,
+                c.trace_enabled,
                 e.id                            AS endpoint_id,
                 e.host,
                 e.port,

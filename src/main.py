@@ -148,6 +148,9 @@ class CertificateGuardian:
                 caa_records=cert_info.caa_records,
                 ldap_anon_bind_allowed=cert_info.ldap_anon_bind_allowed,
                 ldap_plain_available=cert_info.ldap_plain_available,
+                server_header=cert_info.server_header,
+                cors_wildcard=cert_info.cors_wildcard,
+                trace_enabled=cert_info.trace_enabled,
             )
 
             # Record successful scan
