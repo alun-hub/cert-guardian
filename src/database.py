@@ -148,6 +148,8 @@ class Database:
             "server_header TEXT",
             "cors_wildcard INTEGER",
             "trace_enabled INTEGER",
+            "oidc_config TEXT",
+            "saml_config TEXT",
         ]:
             try:
                 cursor.execute(f"ALTER TABLE certificates ADD COLUMN {col_def}")
@@ -327,7 +329,9 @@ class Database:
                        ldap_plain_available: bool = None,
                        server_header: str = None,
                        cors_wildcard: bool = None,
-                       trace_enabled: bool = None) -> int:
+                       trace_enabled: bool = None,
+                       oidc_config: dict = None,
+                       saml_config: dict = None) -> int:
         """Add or update a certificate"""
         cursor = self.conn.cursor()
         now = datetime.utcnow().isoformat()
@@ -337,6 +341,8 @@ class Database:
         header_recommendations_json = json.dumps(header_recommendations) if header_recommendations else None
         insecure_cookies_json = json.dumps(insecure_cookies) if insecure_cookies is not None else None
         caa_records_json = json.dumps(caa_records) if caa_records is not None else None
+        oidc_config_json = json.dumps(oidc_config) if oidc_config is not None else None
+        saml_config_json = json.dumps(saml_config) if saml_config is not None else None
 
         cursor.execute("""
             INSERT INTO certificates (
@@ -351,9 +357,10 @@ class Database:
                 redirects_to_https, insecure_cookies, caa_present, caa_records,
                 ldap_anon_bind_allowed, ldap_plain_available,
                 server_header, cors_wildcard, trace_enabled,
+                oidc_config, saml_config,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 subject = excluded.subject,
                 issuer = excluded.issuer,
@@ -392,6 +399,8 @@ class Database:
                 server_header = excluded.server_header,
                 cors_wildcard = excluded.cors_wildcard,
                 trace_enabled = excluded.trace_enabled,
+                oidc_config = excluded.oidc_config,
+                saml_config = excluded.saml_config,
                 updated_at = excluded.updated_at
         """, (fingerprint, subject, issuer, not_before, not_after,
               serial_number, san_json, key_type, key_size, signature_algorithm,
@@ -407,6 +416,7 @@ class Database:
               _bool_or_none(caa_present), caa_records_json,
               _bool_or_none(ldap_anon_bind_allowed), _bool_or_none(ldap_plain_available),
               server_header, _bool_or_none(cors_wildcard), _bool_or_none(trace_enabled),
+              oidc_config_json, saml_config_json,
               now, now))
         self.conn.commit()
 
@@ -989,6 +999,8 @@ class Database:
                 c.server_header,
                 c.cors_wildcard,
                 c.trace_enabled,
+                c.oidc_config,
+                c.saml_config,
                 e.id                            AS endpoint_id,
                 e.host,
                 e.port,

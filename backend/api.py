@@ -1592,6 +1592,8 @@ async def trigger_scan(
             server_header=cert_info.server_header,
             cors_wildcard=cert_info.cors_wildcard,
             trace_enabled=cert_info.trace_enabled,
+            oidc_config=cert_info.oidc_config,
+            saml_config=cert_info.saml_config,
         )
         db.add_scan(
             cert_id, endpoint_id, 'success',

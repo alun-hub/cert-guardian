@@ -616,6 +616,179 @@ def analyze_endpoint(row: dict) -> List[SecurityFinding]:
         ))
 
     # ------------------------------------------------------------------ #
+    # OIDC / OAuth2 findings
+    # ------------------------------------------------------------------ #
+
+    oidc_raw = row.get("oidc_config")
+    oidc = _parse_json_field(oidc_raw) if oidc_raw else None
+    if oidc:
+        algs = [a.lower() for a in oidc.get("id_token_signing_alg_values_supported", [])]
+        response_types = oidc.get("response_types_supported", [])
+        grant_types = oidc.get("grant_types_supported", [])
+        pkce_methods = oidc.get("code_challenge_methods_supported", [])
+        issuer = oidc.get("issuer") or ""
+
+        if "none" in algs:
+            findings.append(SecurityFinding(
+                finding_id="OIDC_NONE_ALGORITHM",
+                severity="critical",
+                category="auth",
+                title="OIDC accepterar algoritmen 'none' — tokens utan signatur",
+                description=(
+                    "Servern annonserar 'none' i id_token_signing_alg_values_supported. "
+                    "En angripare kan skapa ett JWT-token utan signatur som accepteras "
+                    "av en sårbar klient, vilket ger fullständig autentiseringskringgång."
+                ),
+                recommendation=(
+                    "Ta bort 'none' från tillåtna signeringsalgoritmer. "
+                    "Acceptera bara RS256, RS384, RS512, ES256, ES384 eller PS256."
+                ),
+                detail=f"Tillåtna algoritmer: {', '.join(oidc.get('id_token_signing_alg_values_supported', []))}",
+            ))
+
+        if issuer.startswith("http://"):
+            findings.append(SecurityFinding(
+                finding_id="OIDC_HTTP_ISSUER",
+                severity="high",
+                category="auth",
+                title="OIDC issuer använder okrypterad HTTP",
+                description=(
+                    "Issuer-URL:en i OIDC discovery-dokumentet börjar med http:// istället för https://. "
+                    "Token-utfärdaren är nåbar utan kryptering, vilket möjliggör avlyssning "
+                    "och manipulation av tokens i transit."
+                ),
+                recommendation="Konfigurera OIDC-providern att använda https:// som issuer-URL.",
+                detail=f"Issuer: {issuer}",
+            ))
+
+        implicit_types = [rt for rt in response_types if rt in ("token", "id_token") or
+                          (isinstance(rt, str) and " " not in rt and rt not in ("code",)
+                           and any(t in rt.split() for t in ["token", "id_token"]))]
+        # simpler: flag if any response_type contains 'token' but not 'code'
+        has_implicit = any(
+            "token" in rt.lower() and "code" not in rt.lower()
+            for rt in response_types
+        )
+        if has_implicit:
+            findings.append(SecurityFinding(
+                finding_id="OIDC_IMPLICIT_FLOW",
+                severity="medium",
+                category="auth",
+                title="OIDC implicit flow är aktiverat (deprecerat)",
+                description=(
+                    "Response-typer som returnerar tokens direkt (utan authorization code) är aktiverade. "
+                    "Implicit flow är deprecerat i OAuth 2.1 eftersom tokens exponeras i URL-fragment, "
+                    "vilket ökar risken för token-läckage via referrer-headers, browser-historik och loggar."
+                ),
+                recommendation=(
+                    "Inaktivera implicit flow. Använd authorization code flow med PKCE istället. "
+                    "Ta bort 'token' och 'id_token' som fristående response_types."
+                ),
+                detail=f"Response types: {', '.join(response_types)}",
+            ))
+
+        if "password" in grant_types:
+            findings.append(SecurityFinding(
+                finding_id="OIDC_PASSWORD_GRANT",
+                severity="medium",
+                category="auth",
+                title="OIDC Resource Owner Password Credentials grant är aktiverat",
+                description=(
+                    "Password grant (ROPC) kräver att klienten hanterar användarens lösenord direkt. "
+                    "Det kringgår MFA och moderna autentiseringsflöden, och innebär att "
+                    "klientapplikationen ser klartextlösenordet."
+                ),
+                recommendation=(
+                    "Inaktivera password grant. Migrera klienter till authorization code flow med PKCE."
+                ),
+                detail=f"Grant types: {', '.join(grant_types)}",
+            ))
+
+        if not pkce_methods or "S256" not in pkce_methods:
+            findings.append(SecurityFinding(
+                finding_id="OIDC_NO_PKCE",
+                severity="low",
+                category="auth",
+                title="OIDC saknar stöd för PKCE (S256)",
+                description=(
+                    "Servern annonserar inte S256 i code_challenge_methods_supported. "
+                    "PKCE skyddar mot authorization code interception-attacker, "
+                    "särskilt viktigt för native appar och SPA:er."
+                ),
+                recommendation=(
+                    "Aktivera PKCE med S256 (SHA-256) i authorization server-konfigurationen. "
+                    "Kräv PKCE för alla publika klienter."
+                ),
+                detail=f"code_challenge_methods_supported: {pkce_methods or '[]'}",
+            ))
+
+    # ------------------------------------------------------------------ #
+    # SAML findings
+    # ------------------------------------------------------------------ #
+
+    saml_raw = row.get("saml_config")
+    saml = _parse_json_field(saml_raw) if saml_raw else None
+    if saml:
+        if not saml.get("has_signing_cert"):
+            findings.append(SecurityFinding(
+                finding_id="SAML_NO_SIGNING_CERT",
+                severity="medium",
+                category="auth",
+                title="SAML metadata saknar signeringscertifikat",
+                description=(
+                    "Ingen KeyDescriptor med use='signing' hittades i SAML-metadata. "
+                    "Utan ett signeringscertifikat kan SAML-assertions eventuellt inte "
+                    "verifieras korrekt av Service Providers."
+                ),
+                recommendation=(
+                    "Konfigurera IdP att publicera ett signeringscertifikat i metadata "
+                    "och säkerställ att SP:er validerar assertion-signaturer."
+                ),
+            ))
+        else:
+            not_after_str = saml.get("signing_cert_not_after")
+            if not_after_str:
+                try:
+                    not_after = datetime.fromisoformat(not_after_str)
+                    days_left = (not_after - datetime.utcnow()).days
+                    if days_left < 14:
+                        findings.append(SecurityFinding(
+                            finding_id="SAML_CERT_EXPIRING",
+                            severity="critical",
+                            category="auth",
+                            title=f"SAML-signeringscertifikat går ut om {days_left} dagar",
+                            description=(
+                                "SAML IdP-signeringscertifikatet håller på att gå ut. "
+                                "När det löper ut kan SP:er inte längre verifiera SAML-assertions "
+                                "och SSO-inloggningen slutar fungera för alla användare."
+                            ),
+                            recommendation=(
+                                "Förnya SAML-signeringscertifikatet omgående och uppdatera "
+                                "metadata hos alla federerade Service Providers."
+                            ),
+                            detail=f"Går ut: {not_after_str[:10]} ({days_left} dagar)",
+                        ))
+                    elif days_left < 30:
+                        findings.append(SecurityFinding(
+                            finding_id="SAML_CERT_EXPIRING",
+                            severity="high",
+                            category="auth",
+                            title=f"SAML-signeringscertifikat går ut om {days_left} dagar",
+                            description=(
+                                "SAML IdP-signeringscertifikatet löper ut inom 30 dagar. "
+                                "Planera förnyelse i god tid — certifikatbyten kräver ofta "
+                                "koordinering med alla federerade Service Providers."
+                            ),
+                            recommendation=(
+                                "Påbörja certifikatrotation. Publicera nytt certifikat i metadata "
+                                "och distribuera uppdaterad metadata till alla SP:er innan det gamla löper ut."
+                            ),
+                            detail=f"Går ut: {not_after_str[:10]} ({days_left} dagar)",
+                        ))
+                except ValueError:
+                    pass
+
+    # ------------------------------------------------------------------ #
     # LDAP findings (port 636 endpoints)
     # ------------------------------------------------------------------ #
 

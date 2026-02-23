@@ -151,6 +151,8 @@ class CertificateGuardian:
                 server_header=cert_info.server_header,
                 cors_wildcard=cert_info.cors_wildcard,
                 trace_enabled=cert_info.trace_enabled,
+                oidc_config=cert_info.oidc_config,
+                saml_config=cert_info.saml_config,
             )
 
             # Record successful scan

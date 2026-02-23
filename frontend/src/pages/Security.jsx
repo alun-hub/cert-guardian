@@ -28,6 +28,7 @@ const CATEGORY_LABELS = {
   dns: 'DNS',
   ssh: 'SSH',
   ldap: 'LDAP',
+  auth: 'OIDC/SAML',
 }
 
 const ENDPOINT_TYPE_BADGE = {

@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed4
 from http_scanner import HTTPHeaderScanner
 from dns_scanner import check_caa
 from ldap_scanner import scan_ldap
+from oidc_scanner import OIDCScanner
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,9 @@ class CertificateInfo:
     server_header: Optional[str] = None
     cors_wildcard: Optional[bool] = None
     trace_enabled: Optional[bool] = None
+    # OIDC / SAML auth checks
+    oidc_config: Optional[dict] = None
+    saml_config: Optional[dict] = None
 
 
 class TLSScanner:
@@ -514,6 +518,29 @@ class TLSScanner:
                             cert_info.ldap_plain_available = ldap_result.plain_available
                         except Exception as e:
                             logger.warning(f"LDAP scan failed for {host}:{port}: {e}")
+
+                    # OIDC / SAML auth check (HTTPS endpoints only)
+                    if port != 636:
+                        try:
+                            auth_scanner = OIDCScanner(timeout=self.timeout)
+                            oidc, saml = auth_scanner.scan(host, port)
+                            if oidc.found:
+                                cert_info.oidc_config = {
+                                    "issuer": oidc.issuer,
+                                    "response_types_supported": oidc.response_types_supported,
+                                    "grant_types_supported": oidc.grant_types_supported,
+                                    "id_token_signing_alg_values_supported": oidc.id_token_signing_alg_values_supported,
+                                    "code_challenge_methods_supported": oidc.code_challenge_methods_supported,
+                                    "token_endpoint_auth_methods_supported": oidc.token_endpoint_auth_methods_supported,
+                                }
+                            if saml.found:
+                                cert_info.saml_config = {
+                                    "metadata_url": saml.metadata_url,
+                                    "has_signing_cert": saml.has_signing_cert,
+                                    "signing_cert_not_after": saml.signing_cert_not_after,
+                                }
+                        except Exception as e:
+                            logger.warning(f"OIDC/SAML scan failed for {host}:{port}: {e}")
 
                     status_msg = f"Successfully scanned {host}:{port} - expires {not_after}"
                     if is_self_signed:
