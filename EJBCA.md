@@ -141,11 +141,13 @@ run_once()
 
 ### API-version och endpoint-detektion
 
-Klienten probar automatiskt:
-1. **`POST /v2/certificate/search`** (Enterprise) — fullständig paginering, `current_page` 1-indexerat
-2. **`POST /v1/certificate/search`** (Community/äldre Enterprise) — enkel sida, `max_number_of_results` styr antalet
+Klienten väljer API-version via **lazy fallback** — ingen separat sondering görs:
 
-För Community-installationer med många certifikat: sätt `max_results_per_page: 1000` (max som EJBCA tillåter per sida). Alla certifikat over 1000 kommer **inte** att hämtas om v2 inte finns.
+1. Första anropet görs alltid mot **`POST /v2/certificate/search`** (Enterprise, paginerat, `current_page` 1-indexerat).
+2. Om EJBCA svarar `404`, `405` eller `501` faller klienten automatiskt tillbaka till **`POST /v1/certificate/search`** (Community/äldre Enterprise, enkel sida med `max_number_of_results`). En `INFO`-loggpost skrivs.
+3. Alla andra HTTP-fel (t.ex. `401`, `403`) ger ett åtgärdsbart felmeddelande — se [Felsökning](#felsökning) nedan.
+
+För Community-installationer med många certifikat: sätt `max_results_per_page: 1000` (max som EJBCA tillåter per sida). Alla certifikat över 1000 kommer **inte** att hämtas om v2 inte finns.
 
 ### Manuell synk via API
 
@@ -290,7 +292,9 @@ eller vid fel:
 
 ## Felsökning
 
-### "Connection failed"
+Klienten returnerar åtgärdbara felmeddelanden för de vanligaste problemen. Nedan beskrivs vad varje fel betyder och hur du löser det.
+
+### "Connection failed — check host, port and firewall rules"
 
 ```bash
 # Kontrollera att EJBCA REST API är aktiverat och nåbart
@@ -300,18 +304,42 @@ curl -k https://ejbca.example.com/ejbca-rest-api/v1/ca
 curl -v https://ejbca.example.com:8443/ejbca-rest-api/v1/ca
 ```
 
-### "TLS error: certificate verify failed"
+### "TLS error — provide ca_pem or set verify_tls: false"
 
 Antingen:
-- Sätt `verify_tls: false` (ej rekommenderat i produktion)
-- Eller ange EJBCA:s CA-certifikat i `ca_pem`-fältet
+- Ange EJBCA:s CA-certifikat i `ca_pem`-fältet (rekommenderat)
+- Eller sätt `verify_tls: false` (ej rekommenderat i produktion)
 
-### "401 Unauthorized"
+### "401 Unauthorized — verify that the client certificate or API key is valid"
 
-- Kontrollera att klientcertifikatet har rätt behörigheter i EJBCA
+- Kontrollera att klientcertifikatet är giltigt och inte utgånget
 - Verifiera att `auth_method` matchar EJBCA:s konfiguration
 - **API-nyckel fungerar bara på Enterprise** — använd mTLS för Community
-- För API-nyckel: kontrollera att nyckeln är giltig och inte utgången
+- För API-nyckel: kontrollera att nyckeln är giltig och inte återkallad
+
+### "403 Forbidden — ensure the client has the 'REST Certificate Management' role"
+
+Klientcertifikatet saknar behörighet i EJBCA:
+1. Logga in i EJBCA Admin UI
+2. Gå till **Roles and Access Rules** → hitta eller skapa en roll
+3. Lägg till access rule **`/rest/v1/certificate`** (läs) och **`/rest/v2/certificate`** (läs)
+4. Lägg till klientens End Entity i rollen
+
+### "404 Not Found — verify base_url points to the EJBCA REST API root"
+
+Kontrollera att `base_url` slutar på REST API-rotkatalogen, t.ex.:
+```
+https://ejbca.example.com/ejbca/ejbca-rest-api
+https://ejbca.example.com:8443/ejbca-rest-api
+```
+Testa manuellt:
+```bash
+curl -k https://ejbca.example.com/ejbca/ejbca-rest-api/v1/ca
+```
+
+### "405 Method Not Allowed — check that ejbca-rest-api module is installed"
+
+REST API-modulen är inte aktiverad i EJBCA. I Enterprise: kontrollera att `ejbca-rest-api` är installerat och aktiverat i `web.xml` eller motsvarande konfiguration.
 
 ### Färre certifikat än förväntat (Community)
 
