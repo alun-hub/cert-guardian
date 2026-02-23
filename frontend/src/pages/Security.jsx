@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Shield, AlertCircle, AlertTriangle, CheckCircle, Globe,
-  ChevronDown, ChevronRight, Lock, Info,
+  ChevronDown, ChevronRight, Lock, Info, Terminal, Database,
 } from 'lucide-react'
 import { securityService } from '../services/api'
 
@@ -25,6 +25,15 @@ const CATEGORY_LABELS = {
   certificate: 'Certifikat',
   tls: 'TLS-konfiguration',
   headers: 'HTTP-headers',
+  dns: 'DNS',
+  ssh: 'SSH',
+  ldap: 'LDAP',
+}
+
+const ENDPOINT_TYPE_BADGE = {
+  tls:  { label: 'HTTPS',  className: 'bg-blue-100 text-blue-700',   icon: Lock },
+  ssh:  { label: 'SSH',    className: 'bg-purple-100 text-purple-700', icon: Terminal },
+  ldap: { label: 'LDAPS',  className: 'bg-teal-100 text-teal-700',   icon: Database },
 }
 
 export default function Security() {
@@ -120,7 +129,7 @@ export default function Security() {
       <div className="border-b border-gray-200">
         <nav className="flex gap-8">
           {[
-            { id: 'report',  label: `TLS-analys (${totalFindings})` },
+            { id: 'report',  label: `Säkerhetsanalys (${totalFindings})` },
             { id: 'issues',  label: `Certifikatproblem (${stats.total})` },
             { id: 'headers', label: `HTTP-headers (${headers.length})` },
           ].map(({ id, label }) => (
@@ -183,9 +192,11 @@ function ReportTab({ report, loading }) {
   return (
     <div className="space-y-4">
       {sorted.map((entry) => {
-        const key = entry.endpoint_id
+        const key = `${entry.endpoint_type}-${entry.endpoint_id}`
         const isExpanded = expandedId === key
         const hasFindings = entry.findings.length > 0
+        const typeBadge = ENDPOINT_TYPE_BADGE[entry.endpoint_type] || ENDPOINT_TYPE_BADGE.tls
+        const TypeIcon = typeBadge.icon
         return (
           <div key={key} className="bg-white rounded-lg shadow-sm border overflow-hidden">
             {/* Endpoint header */}
@@ -200,6 +211,10 @@ function ReportTab({ report, loading }) {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-gray-900">{entry.host}:{entry.port}</span>
+                    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded ${typeBadge.className}`}>
+                      <TypeIcon className="w-3 h-3" />
+                      {typeBadge.label}
+                    </span>
                     {entry.tls_version && (
                       <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
                         {entry.tls_version}

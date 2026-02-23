@@ -994,6 +994,9 @@ class Database:
                     AND cs2.endpoint_id = e.id
                     AND cs2.status = 'success'
               )
+              AND NOT EXISTS (
+                  SELECT 1 FROM ssh_scans s WHERE s.endpoint_id = e.id
+              )
             ORDER BY e.host, e.port
         """)
         return [dict(row) for row in cursor.fetchall()]
