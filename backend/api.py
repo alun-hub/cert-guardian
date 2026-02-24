@@ -2354,12 +2354,16 @@ async def execute_sweep(sweep_id: int):
     if not sweep:
         return
 
+    name = sweep.get('name', f'sweep-{sweep_id}')
+    target = sweep['target']
+    ports = json.loads(sweep['ports'])
+
     try:
         db.update_sweep_status(sweep_id, "running",
                                started_at=datetime.utcnow().isoformat())
 
         scanner_net = NetworkScanner(timeout=3.0, max_concurrent=100)
-        ports = json.loads(sweep['ports'])
+        logger.info("Sweep [%s] started: target=%s ports=%s", name, target, ports)
 
         def update_progress(progress):
             db.update_sweep_status(
@@ -2369,9 +2373,13 @@ async def execute_sweep(sweep_id: int):
             )
 
         # Run the async sweep
-        open_ports = await scanner_net.sweep(sweep['target'], ports, update_progress)
+        open_ports = await scanner_net.sweep(target, ports, update_progress)
+
+        logger.info("Sweep [%s] port scan done: %d open port(s) found", name, len(open_ports))
 
         # Process discovered endpoints
+        certs_found = 0
+        certs_failed = 0
         for result in open_ports:
             # Create endpoint with metadata from sweep config
             endpoint_id = db.add_endpoint(
@@ -2428,13 +2436,22 @@ async def execute_sweep(sweep_id: int):
                     tls_version=cert_info.tls_version,
                     cipher=cert_info.cipher
                 )
+                logger.info("Sweep [%s] cert: %s:%d  %s  (expires %s)",
+                            name, result.ip, result.port,
+                            cert_info.subject, cert_info.not_after.date())
+                certs_found += 1
+            else:
+                logger.warning("Sweep [%s] no cert retrieved from %s:%d",
+                               name, result.ip, result.port)
+                certs_failed += 1
 
         db.update_sweep_status(sweep_id, "completed",
                                completed_at=datetime.utcnow().isoformat())
+        logger.info("Sweep [%s] completed: %d cert(s) found, %d failed",
+                    name, certs_found, certs_failed)
 
     except Exception as e:
-        import logging
-        logging.error(f"Sweep {sweep_id} failed: {e}")
+        logger.error("Sweep [%s] failed: %s", name, e, exc_info=True)
         db.update_sweep_status(sweep_id, "failed", error_message=str(e))
 
 
