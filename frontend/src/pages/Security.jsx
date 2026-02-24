@@ -492,8 +492,11 @@ function HeadersTab({ headers, loading, headerFindings = [], reportLoading }) {
     )
   }
 
+  // Index findings by endpoint_id so HeaderRow can show them inline
+  const findingsByEndpoint = {}
+  headerFindings.forEach(e => { findingsByEndpoint[e.endpoint_id] = e.findings })
+
   return (
-    <div className="space-y-6">
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
       <table className="w-full">
         <thead className="bg-gray-50 border-b">
@@ -501,7 +504,6 @@ function HeadersTab({ headers, loading, headerFindings = [], reportLoading }) {
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endpoint</th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Poäng</th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Betyg</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Saknade headers</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200">
@@ -512,6 +514,7 @@ function HeadersTab({ headers, loading, headerFindings = [], reportLoading }) {
               <HeaderRow
                 key={key}
                 entry={entry}
+                findings={findingsByEndpoint[entry.endpoint_id] || []}
                 isExpanded={isExpanded}
                 onToggle={() => setExpandedId(isExpanded ? null : key)}
               />
@@ -520,33 +523,13 @@ function HeadersTab({ headers, loading, headerFindings = [], reportLoading }) {
         </tbody>
       </table>
     </div>
-
-    {/* Security findings for header category */}
-    {!reportLoading && headerFindings.length > 0 && (
-      <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wider px-1">Säkerhetsfynd</h3>
-        {headerFindings.map(endpoint => (
-          <div key={endpoint.endpoint_id} className="bg-white rounded-lg shadow-sm border overflow-hidden">
-            <div className="px-6 py-3 bg-gray-50 border-b flex items-center gap-2">
-              <span className="font-medium text-gray-900 text-sm">{endpoint.host}:{endpoint.port}</span>
-              {endpoint.owner && <span className="text-xs text-gray-500">— {endpoint.owner}</span>}
-            </div>
-            <div className="divide-y divide-gray-50">
-              {endpoint.findings.map(f => <FindingRow key={f.finding_id} finding={f} />)}
-            </div>
-          </div>
-        ))}
-      </div>
-    )}
-    </div>
   )
 }
 
-function HeaderRow({ entry, isExpanded, onToggle }) {
+function HeaderRow({ entry, findings = [], isExpanded, onToggle }) {
   const gradeClass = GRADE_COLORS[entry.header_grade] || 'bg-gray-100 text-gray-800'
   const missingArr = Array.isArray(entry.headers_missing) ? entry.headers_missing : []
   const presentArr = Array.isArray(entry.headers_present) ? entry.headers_present : []
-  const recommendArr = Array.isArray(entry.header_recommendations) ? entry.header_recommendations : []
 
   return (
     <>
@@ -556,32 +539,31 @@ function HeaderRow({ entry, isExpanded, onToggle }) {
             {isExpanded
               ? <ChevronDown className="w-4 h-4 text-gray-400" />
               : <ChevronRight className="w-4 h-4 text-gray-400" />}
-            <span className="font-medium text-gray-900">{entry.host}:{entry.port}</span>
+            <div>
+              <span className="font-medium text-gray-900">{entry.host}:{entry.port}</span>
+              {entry.owner && <span className="ml-2 text-xs text-gray-500">{entry.owner}</span>}
+            </div>
           </div>
         </td>
         <td className="px-6 py-4">
           <span className="font-medium text-gray-900">{entry.header_score}/100</span>
         </td>
         <td className="px-6 py-4">
-          <span className={`px-2 py-1 text-xs font-bold rounded ${gradeClass}`}>
-            {entry.header_grade}
-          </span>
-        </td>
-        <td className="px-6 py-4">
-          <div className="flex flex-wrap gap-1">
-            {missingArr.slice(0, 4).map((h) => (
-              <span key={h} className="px-2 py-0.5 text-xs bg-red-50 text-red-700 rounded">{h}</span>
-            ))}
-            {missingArr.length > 4 && (
-              <span className="text-xs text-gray-500">+{missingArr.length - 4}</span>
+          <div className="flex items-center gap-3">
+            <span className={`px-2 py-1 text-xs font-bold rounded ${gradeClass}`}>
+              {entry.header_grade}
+            </span>
+            {findings.length > 0 && (
+              <span className="text-xs text-gray-500">{findings.length} fynd</span>
             )}
           </div>
         </td>
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={4} className="px-6 py-5 bg-gray-50">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+          <td colSpan={3} className="bg-gray-50 border-t border-gray-100">
+            {/* Headers summary */}
+            <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-6 text-sm border-b border-gray-100">
               <div>
                 <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Befintliga headers</p>
                 <div className="flex flex-wrap gap-2">
@@ -596,15 +578,17 @@ function HeaderRow({ entry, isExpanded, onToggle }) {
                     <span key={h} className="px-2 py-1 text-xs bg-red-50 text-red-700 rounded border border-red-200">{h}</span>
                   )) : <span className="text-gray-500">Inga</span>}
                 </div>
+              </div>
 
+              <div className="space-y-3">
                 {entry.hsts_max_age != null && (
-                  <div className="mt-4">
+                  <div>
                     <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">HSTS Max-Age</p>
                     <p className="text-gray-900">{entry.hsts_max_age.toLocaleString()} sekunder</p>
                   </div>
                 )}
                 {entry.csp_has_unsafe_inline != null && (
-                  <div className="mt-2">
+                  <div>
                     <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">CSP unsafe-inline</p>
                     <span className={`text-xs font-medium ${entry.csp_has_unsafe_inline ? 'text-red-700' : 'text-green-700'}`}>
                       {entry.csp_has_unsafe_inline ? 'Finns (dåligt)' : 'Saknas (bra)'}
@@ -612,23 +596,19 @@ function HeaderRow({ entry, isExpanded, onToggle }) {
                   </div>
                 )}
               </div>
-
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Rekommendationer</p>
-                {recommendArr.length > 0 ? (
-                  <ul className="space-y-2">
-                    {recommendArr.map((rec, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className="text-blue-500 mt-0.5">&#8226;</span>
-                        <span className="text-gray-700">{rec}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-green-700">Inga rekommendationer — headers ser bra ut!</p>
-                )}
-              </div>
             </div>
+
+            {/* Findings with severity, description and recommendation */}
+            {findings.length > 0 ? (
+              <div className="divide-y divide-gray-100">
+                {findings.map(f => <FindingRow key={f.finding_id} finding={f} />)}
+              </div>
+            ) : (
+              <div className="px-6 py-4 flex items-center gap-2 text-green-700 text-sm">
+                <CheckCircle className="w-4 h-4" />
+                Inga säkerhetsfynd
+              </div>
+            )}
           </td>
         </tr>
       )}
