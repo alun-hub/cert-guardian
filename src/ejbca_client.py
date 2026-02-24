@@ -168,9 +168,18 @@ class EjbcaClient:
 
     def _fetch_with_fallback(self, v2_url: str, v1_url: str, page_size: int,
                              max_total: int, ca_dn: Optional[str]) -> List[EjbcaCertificate]:
-        """Try v2 (Enterprise, paginated); fall back to v1 (Community) on 404/405/501."""
+        """Try v2 (Enterprise, paginated); fall back to v1 (Community) on 404/405/501
+        or when v2 returns empty certificates despite reporting certs in pagination_summary."""
         try:
-            return self._fetch_pages(v2_url, page_size, max_total, ca_dn, use_v2=True)
+            certs, v2_total = self._fetch_pages_v2(v2_url, page_size, max_total, ca_dn)
+            if len(certs) == 0 and v2_total > 0:
+                logger.info(
+                    "EJBCA v2 returned 0 certs but reports %d total — "
+                    "falling back to v1 (Community Edition limitation)",
+                    v2_total,
+                )
+                return self._fetch_pages(v1_url, page_size, max_total, ca_dn, use_v2=False)
+            return certs
         except requests.exceptions.HTTPError as exc:
             resp = exc.response
             if resp is not None and resp.status_code in (404, 405, 501):
@@ -209,16 +218,15 @@ class EjbcaClient:
             )
         return f"HTTP {status}: {exc}"
 
-    def _fetch_pages(self, url: str, page_size: int, max_total: int,
-                     ca_dn: Optional[str], use_v2: bool) -> List[EjbcaCertificate]:
-        """Fetch certificate pages from the given search URL.
+    def _fetch_pages_v2(self, url: str, page_size: int, max_total: int,
+                        ca_dn: Optional[str]) -> tuple:
+        """Fetch certificate pages using the v2 (Enterprise) paginated endpoint.
 
-        v2 (Enterprise): current_page is 1-indexed; loop until more_results=False.
-        v1 (Community):  no pagination support — single request with max_number_of_results.
+        Returns (List[EjbcaCertificate], total_count_reported_by_server).
         """
         results: List[EjbcaCertificate] = []
-        # v2 pages are 1-indexed; v1 has no pagination
         current_page = 1
+        total_reported = 0
 
         while len(results) < max_total:
             criteria = [
@@ -228,17 +236,17 @@ class EjbcaClient:
                 criteria.append(
                     {"property": "ISSUER_DN", "value": ca_dn, "operation": "EQUAL"}
                 )
-
-            body: dict = {
+            body = {
                 "max_number_of_results": page_size,
+                "current_page": current_page,
                 "criteria": criteria,
             }
-            if use_v2:
-                body["current_page"] = current_page
-
             resp = self.session.post(url, json=body, timeout=60)
             resp.raise_for_status()
             data = resp.json()
+
+            summary = data.get('pagination_summary', {})
+            total_reported = summary.get('total_certs', total_reported)
 
             raw_certs = data.get('certificates', [])
             for item in raw_certs:
@@ -250,20 +258,49 @@ class EjbcaClient:
                     fp = item.get('fingerprint', '?')
                     logger.warning(f"Failed to parse EJBCA cert {fp}: {e}")
 
-            if not use_v2 or len(raw_certs) == 0:
-                # v1: single page only; v2: stop if empty page returned
+            if len(raw_certs) == 0:
                 break
 
-            # v2 pagination: check more_results in response or pagination_summary
             more = data.get('more_results')
             if more is None:
-                summary = data.get('pagination_summary', {})
                 more = summary.get('response_more_results', False)
-
             if not more:
                 break
             current_page += 1
 
+        return results, total_reported
+
+    def _fetch_pages(self, url: str, page_size: int, max_total: int,
+                     ca_dn: Optional[str], use_v2: bool) -> List[EjbcaCertificate]:
+        """Fetch a single page from the v1 (Community) endpoint.
+
+        v1 has no pagination — single request with max_number_of_results.
+        """
+        criteria = [
+            {"property": "STATUS", "value": "CERT_ACTIVE", "operation": "EQUAL"}
+        ]
+        if ca_dn:
+            criteria.append(
+                {"property": "ISSUER_DN", "value": ca_dn, "operation": "EQUAL"}
+            )
+        # EJBCA CE v1 caps max_number_of_results at 400; Enterprise allows up to 1000
+        body: dict = {
+            "max_number_of_results": min(page_size, max_total, 400),
+            "criteria": criteria,
+        }
+        resp = self.session.post(url, json=body, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+
+        results: List[EjbcaCertificate] = []
+        for item in data.get('certificates', []):
+            try:
+                cert = self._parse_item(item)
+                if cert:
+                    results.append(cert)
+            except Exception as e:
+                fp = item.get('fingerprint', '?')
+                logger.warning(f"Failed to parse EJBCA cert {fp}: {e}")
         return results
 
     def _parse_item(self, item: dict) -> Optional[EjbcaCertificate]:
@@ -272,7 +309,16 @@ class EjbcaClient:
         if not der_b64:
             return None
 
-        der_bytes = base64.b64decode(der_b64)
+        # EJBCA REST v1 returns certificate as base64(base64(DER)) — the inner
+        # base64 is the PEM body (DER re-encoded).  Decode once to get the
+        # inner base64 string, then decode again to reach raw DER bytes.
+        # If the first decode already gives valid DER (starts with 0x30),
+        # use it directly (v2 Enterprise may return single-encoded DER).
+        inner = base64.b64decode(der_b64)
+        if inner and inner[0] == 0x30:
+            der_bytes = inner
+        else:
+            der_bytes = base64.b64decode(inner)
         parsed = self._parse_x509(der_bytes)
 
         # EJBCA metadata — field names vary by version
