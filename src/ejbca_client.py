@@ -268,6 +268,15 @@ class EjbcaClient:
                 break
             current_page += 1
 
+        if total_reported > 0 and len(results) < total_reported:
+            logger.warning(
+                "EJBCA v2 pagination may be incomplete: server reports %d active certs "
+                "but only %d were retrieved (stopped after page %d). "
+                "This can happen if the pagination response field differs between EJBCA versions. "
+                "Check raw response keys: more_results / pagination_summary.response_more_results",
+                total_reported, len(results), current_page,
+            )
+
         return results, total_reported
 
     def _fetch_pages(self, url: str, page_size: int, max_total: int,
