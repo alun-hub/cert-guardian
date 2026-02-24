@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Users, Plus, Pencil, Trash2, Key, X, AlertCircle, Check } from 'lucide-react'
 import { userService } from '../services/api'
+import api from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function UserManagement() {
@@ -155,6 +156,9 @@ export default function UserManagement() {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Created
               </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Webhook
+              </th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Actions
               </th>
@@ -186,6 +190,12 @@ export default function UserManagement() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {new Date(user.created_at).toLocaleDateString()}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  {user.notify_webhook
+                    ? <span className="text-green-600">konfigurerad ✓</span>
+                    : <span className="text-gray-400">—</span>
+                  }
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
                   <div className="flex items-center justify-end gap-2">
@@ -412,8 +422,11 @@ function EditUserModal({ user, onClose, onSubmit, isCurrentUser }) {
     role: user.role,
     is_active: user.is_active,
   })
+  const [webhookValue, setWebhookValue] = useState('')
   const [error, setError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [webhookSaving, setWebhookSaving] = useState(false)
+  const [webhookMsg, setWebhookMsg] = useState('')
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -426,6 +439,20 @@ function EditUserModal({ user, onClose, onSubmit, isCurrentUser }) {
       setError(err.message)
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleSaveWebhook = async () => {
+    try {
+      setWebhookSaving(true)
+      setWebhookMsg('')
+      await api.put(`/users/${user.id}/webhook`, { webhook_url: webhookValue || null })
+      setWebhookMsg('Webhook sparad')
+    } catch (err) {
+      setWebhookMsg('Fel vid sparning')
+    } finally {
+      setWebhookSaving(false)
+      setTimeout(() => setWebhookMsg(''), 3000)
     }
   }
 
@@ -489,6 +516,36 @@ function EditUserModal({ user, onClose, onSubmit, isCurrentUser }) {
             {isCurrentUser && (
               <p className="text-xs text-gray-500 mt-1">You cannot deactivate your own account</p>
             )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Mattermost-webhook</label>
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={webhookValue}
+                onChange={(e) => setWebhookValue(e.target.value)}
+                placeholder={user.notify_webhook ? '(konfigurerad — lämna tom för att behålla)' : 'https://hooks.mattermost.com/... (tom = global)'}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                disabled={webhookSaving}
+              />
+              <button
+                type="button"
+                onClick={handleSaveWebhook}
+                disabled={webhookSaving}
+                className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm whitespace-nowrap"
+              >
+                {webhookSaving ? '...' : 'Spara'}
+              </button>
+            </div>
+            {webhookMsg && (
+              <p className={`text-xs mt-1 ${webhookMsg.startsWith('Fel') ? 'text-red-600' : 'text-green-600'}`}>
+                {webhookMsg}
+              </p>
+            )}
+            <p className="text-xs text-gray-400 mt-1">
+              Webhook: {user.notify_webhook ? 'konfigurerad ✓' : '—'}
+            </p>
           </div>
 
           <div className="flex justify-end gap-3 pt-4">

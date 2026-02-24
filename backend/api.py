@@ -231,6 +231,18 @@ class CertificateInfo(BaseModel):
     endpoints: List[Dict[str, Any]]
 
 
+class CertificateOwnerUpdate(BaseModel):
+    owner_user_id: Optional[int]  # None = clear owner
+
+
+class CertificateWebhookUpdate(BaseModel):
+    webhook_url: Optional[str] = None  # None/empty = clear webhook
+
+
+class UserWebhookUpdate(BaseModel):
+    webhook_url: Optional[str] = None  # None/empty = clear webhook
+
+
 # Initialize
 @app.on_event("startup")
 async def startup_event():
@@ -897,6 +909,8 @@ async def get_certificates(
             c.key_usage_key_encipherment,
             c.chain_has_expiring,
             c.weak_signature,
+            c.owner_user_id,
+            c.notify_webhook,
             c.header_score,
             c.header_grade,
             c.headers_present,
@@ -969,6 +983,19 @@ async def get_certificates(
         )
         ejbca_row = cursor.fetchone()
         cert_dict['ejbca'] = dict(ejbca_row) if ejbca_row else None
+
+        # Attach owner object
+        owner_user_id = cert_dict.get('owner_user_id')
+        if owner_user_id:
+            cursor.execute("SELECT id, username FROM users WHERE id = ?", (owner_user_id,))
+            owner_row = cursor.fetchone()
+            cert_dict['owner'] = dict(owner_row) if owner_row else None
+        else:
+            cert_dict['owner'] = None
+
+        # Expose webhook indicator (not the full URL) in list view
+        cert_dict['notify_webhook_configured'] = bool(cert_dict.get('notify_webhook'))
+        cert_dict.pop('notify_webhook', None)
 
         results.append(cert_dict)
 
@@ -1382,7 +1409,128 @@ async def get_certificate(cert_id: int, user: User = Depends(require_auth)):
     ejbca_row = cursor.fetchone()
     cert_dict['ejbca'] = dict(ejbca_row) if ejbca_row else None
 
+    # Attach owner info
+    owner_user_id = cert_dict.get('owner_user_id')
+    if owner_user_id:
+        cursor.execute("SELECT id, username FROM users WHERE id = ?", (owner_user_id,))
+        owner_row = cursor.fetchone()
+        cert_dict['owner'] = dict(owner_row) if owner_row else None
+    else:
+        cert_dict['owner'] = None
+
+    # Expose notify_webhook only to editors+
+    if not user.has_role("editor"):
+        cert_dict.pop('notify_webhook', None)
+
     return cert_dict
+
+
+@app.put("/api/certificates/{cert_id}/owner")
+async def set_certificate_owner(
+    cert_id: int,
+    body: CertificateOwnerUpdate,
+    request: Request,
+    user: User = Depends(require_editor),
+):
+    """Set or clear the owner of a certificate (editor+)."""
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT id, subject FROM certificates WHERE id = ?", (cert_id,))
+    cert = cursor.fetchone()
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+
+    # Validate owner_user_id if provided
+    if body.owner_user_id is not None:
+        cursor.execute("SELECT id FROM users WHERE id = ?", (body.owner_user_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User not found")
+
+    db.set_certificate_owner(cert_id, body.owner_user_id)
+
+    audit_log(
+        user_email=user.email,
+        action="certificate_owner_set",
+        resource_type="certificate",
+        resource_id=cert_id,
+        details=f"Set owner_user_id={body.owner_user_id} on cert '{dict(cert)['subject']}'",
+        ip_address=get_client_ip(request),
+    )
+    return {"message": "Owner updated"}
+
+
+@app.put("/api/certificates/{cert_id}/webhook")
+async def set_certificate_webhook(
+    cert_id: int,
+    body: CertificateWebhookUpdate,
+    request: Request,
+    user: User = Depends(require_editor),
+):
+    """Set or clear the per-certificate notify webhook (editor+)."""
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT id, subject FROM certificates WHERE id = ?", (cert_id,))
+    cert = cursor.fetchone()
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+
+    url = body.webhook_url or None
+    db.set_certificate_webhook(cert_id, url)
+
+    audit_log(
+        user_email=user.email,
+        action="certificate_webhook_set",
+        resource_type="certificate",
+        resource_id=cert_id,
+        details=f"Set notify_webhook={mask_webhook_url(url)} on cert '{dict(cert)['subject']}'",
+        ip_address=get_client_ip(request),
+    )
+    return {"message": "Webhook updated"}
+
+
+@app.put("/api/users/me/webhook")
+async def set_own_webhook(
+    body: UserWebhookUpdate,
+    request: Request,
+    user: User = Depends(require_auth),
+):
+    """Set or clear the current user's default notify webhook."""
+    url = body.webhook_url or None
+    db.set_user_webhook(user.id, url)
+
+    audit_log(
+        user_email=user.email,
+        action="user_webhook_set",
+        resource_type="user",
+        resource_id=user.id,
+        details=f"Set own notify_webhook={mask_webhook_url(url)}",
+        ip_address=get_client_ip(request),
+    )
+    return {"message": "Webhook updated"}
+
+
+@app.put("/api/users/{user_id}/webhook")
+async def set_user_webhook(
+    user_id: int,
+    body: UserWebhookUpdate,
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """Set or clear a user's default notify webhook (admin only)."""
+    target = db.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    url = body.webhook_url or None
+    db.set_user_webhook(user_id, url)
+
+    audit_log(
+        user_email=admin.email,
+        action="user_webhook_set",
+        resource_type="user",
+        resource_id=user_id,
+        details=f"Set notify_webhook={mask_webhook_url(url)} for user '{target['username']}'",
+        ip_address=get_client_ip(request),
+    )
+    return {"message": "Webhook updated"}
 
 
 # Get all endpoints

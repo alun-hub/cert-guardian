@@ -326,6 +326,34 @@ class Database:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Migration: certificate ownership and per-cert webhook
+        try:
+            cursor.execute("ALTER TABLE certificates ADD COLUMN owner_user_id INTEGER REFERENCES users(id)")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE certificates ADD COLUMN notify_webhook TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # Migration: per-user default webhook
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN notify_webhook TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # EJBCA notifications table (one alert per threshold, forever)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ejbca_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                certificate_id INTEGER NOT NULL,
+                threshold_days INTEGER NOT NULL,
+                notification_type TEXT NOT NULL,
+                sent_at TEXT NOT NULL,
+                UNIQUE(certificate_id, threshold_days)
+            )
+        """)
+
         self.conn.commit()
 
     def add_endpoint(self, host: str, port: int, owner: str = None,
@@ -821,7 +849,7 @@ class Database:
         """Get all users (without password hashes)"""
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT id, username, email, role, is_active, created_at, updated_at
+            SELECT id, username, email, role, is_active, notify_webhook, created_at, updated_at
             FROM users ORDER BY username
         """)
         return [dict(row) for row in cursor.fetchall()]
@@ -1021,6 +1049,92 @@ class Database:
         cursor.execute("SELECT * FROM ejbca_sync_log ORDER BY synced_at DESC LIMIT 1")
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def get_expiring_ejbca_certificates(self, days: int) -> List[Dict]:
+        """EJBCA-cert (source='ejbca') expiring within N days — no endpoint JOIN required."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT c.id, c.fingerprint, c.subject, c.not_after, c.notify_webhook,
+                   julianday(c.not_after) - julianday('now') AS days_until_expiry,
+                   u.id AS owner_user_id, u.username AS owner_username,
+                   u.notify_webhook AS owner_notify_webhook,
+                   ec.ca_dn, ec.username AS ejbca_username, ec.ejbca_status
+            FROM certificates c
+            LEFT JOIN users u ON c.owner_user_id = u.id
+            LEFT JOIN ejbca_certificates ec ON c.id = ec.certificate_id
+            WHERE c.source = 'ejbca'
+              AND julianday(c.not_after) - julianday('now') <= ?
+              AND julianday(c.not_after) - julianday('now') > 0
+            ORDER BY days_until_expiry ASC
+        """, (days,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def set_certificate_owner(self, cert_id: int, owner_user_id: Optional[int]) -> bool:
+        """Set or clear the owner of a certificate."""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute(
+            "UPDATE certificates SET owner_user_id = ?, updated_at = ? WHERE id = ?",
+            (owner_user_id, now, cert_id)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def set_certificate_webhook(self, cert_id: int, webhook_url: Optional[str]) -> bool:
+        """Set or clear the per-certificate notify webhook."""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute(
+            "UPDATE certificates SET notify_webhook = ?, updated_at = ? WHERE id = ?",
+            (webhook_url or None, now, cert_id)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def set_user_webhook(self, user_id: int, webhook_url: Optional[str]) -> bool:
+        """Set or clear a user's default notify webhook."""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute(
+            "UPDATE users SET notify_webhook = ?, updated_at = ? WHERE id = ?",
+            (webhook_url or None, now, user_id)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def was_ejbca_notification_sent(self, cert_id: int, threshold_days: int) -> bool:
+        """Return True if an EJBCA notification has already been sent for this threshold."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM ejbca_notifications WHERE certificate_id = ? AND threshold_days = ?",
+            (cert_id, threshold_days)
+        )
+        return cursor.fetchone() is not None
+
+    def add_ejbca_notification(self, cert_id: int, threshold_days: int, notif_type: str) -> None:
+        """Record that an EJBCA expiry notification was sent for a given threshold."""
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            INSERT OR REPLACE INTO ejbca_notifications
+                (certificate_id, threshold_days, notification_type, sent_at)
+            VALUES (?, ?, ?, ?)
+        """, (cert_id, threshold_days, notif_type, now))
+        self.conn.commit()
+
+    def map_ejbca_username_to_user(self, cert_id: int, ejbca_username: str) -> bool:
+        """Auto-assign owner_user_id if ejbca_username matches a local user and owner not yet set."""
+        user = self.get_user_by_username(ejbca_username)
+        if not user:
+            return False
+        cursor = self.conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute(
+            "UPDATE certificates SET owner_user_id = ?, updated_at = ? WHERE id = ? AND owner_user_id IS NULL",
+            (user['id'], now, cert_id)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     # ==================== Audit Log Methods ====================
 

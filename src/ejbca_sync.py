@@ -81,6 +81,10 @@ def run_ejbca_sync(ejbca_cfg: dict, db: 'Database') -> dict:
             ejbca_status=cert.ejbca_status,
         )
 
+        # Auto-map EJBCA username → cert-guardian user (never overrides manual assignment)
+        if cert.username:
+            db.map_ejbca_username_to_user(cert_id, cert.username)
+
         if existing:
             updated_count += 1
         else:

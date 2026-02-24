@@ -1,14 +1,18 @@
 import { useState, useEffect, Fragment } from 'react'
 import { Search, Lock, AlertCircle, CheckCircle, ChevronUp, ChevronDown, ChevronRight, ChevronDown as ChevronDownIcon } from 'lucide-react'
 import { certificateService } from '../services/api'
+import api from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 import { format } from 'date-fns'
 
 export default function Certificates() {
+  const { isEditor } = useAuth()
   const [certificates, setCertificates] = useState([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
   const [detailsById, setDetailsById] = useState({})
   const [detailsLoading, setDetailsLoading] = useState({})
+  const [users, setUsers] = useState([])
   const [filters, setFilters] = useState({
     search: '',
     expiringDays: null,
@@ -39,6 +43,12 @@ export default function Certificates() {
   useEffect(() => {
     loadCertificates()
   }, [filters])
+
+  useEffect(() => {
+    if (isEditor) {
+      api.get('/users').then(r => setUsers(r.data.users || [])).catch(() => {})
+    }
+  }, [isEditor])
 
   const loadCertificateDetails = async (certId) => {
     try {
@@ -249,6 +259,9 @@ export default function Certificates() {
                     <CertificateDetailsRow
                       cert={detailsById[cert.id]}
                       loading={detailsLoading[cert.id]}
+                      users={users}
+                      isEditor={isEditor}
+                      onDetailsChange={(updated) => setDetailsById(prev => ({ ...prev, [cert.id]: updated }))}
                     />
                   )}
                 </Fragment>
@@ -440,7 +453,51 @@ function CertificateRow({ cert, isExpanded, onToggle }) {
   )
 }
 
-function CertificateDetailsRow({ cert, loading }) {
+function CertificateDetailsRow({ cert, loading, users = [], isEditor = false, onDetailsChange }) {
+  const [ownerEdit, setOwnerEdit] = useState('')
+  const [webhookEdit, setWebhookEdit] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState('')
+
+  useEffect(() => {
+    if (cert) {
+      setOwnerEdit(cert.owner?.id ?? '')
+      setWebhookEdit('')
+    }
+  }, [cert?.id])
+
+  const saveOwner = async () => {
+    try {
+      setSaving(true)
+      setSaveMsg('')
+      await api.put(`/certificates/${cert.id}/owner`, {
+        owner_user_id: ownerEdit === '' ? null : Number(ownerEdit)
+      })
+      const newOwner = users.find(u => u.id === Number(ownerEdit)) || null
+      onDetailsChange?.({ ...cert, owner: newOwner ? { id: newOwner.id, username: newOwner.username } : null })
+      setSaveMsg('Ägare sparad')
+    } catch {
+      setSaveMsg('Fel vid sparning')
+    } finally {
+      setSaving(false)
+      setTimeout(() => setSaveMsg(''), 3000)
+    }
+  }
+
+  const saveWebhook = async () => {
+    try {
+      setSaving(true)
+      setSaveMsg('')
+      await api.put(`/certificates/${cert.id}/webhook`, { webhook_url: webhookEdit || null })
+      setSaveMsg('Webhook sparad')
+    } catch {
+      setSaveMsg('Fel vid sparning')
+    } finally {
+      setSaving(false)
+      setTimeout(() => setSaveMsg(''), 3000)
+    }
+  }
+
   if (loading) {
     return (
       <tr>
@@ -666,6 +723,58 @@ function CertificateDetailsRow({ cert, loading }) {
                 </div>
               </div>
             )}
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Ägare &amp; Notifieringar</p>
+              {saveMsg && (
+                <p className={`text-xs mt-1 ${saveMsg.startsWith('Fel') ? 'text-red-600' : 'text-green-600'}`}>{saveMsg}</p>
+              )}
+              {isEditor ? (
+                <div className="mt-2 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-700 w-20 shrink-0">Ägare</label>
+                    <select
+                      value={ownerEdit}
+                      onChange={e => setOwnerEdit(e.target.value)}
+                      className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">— ingen —</option>
+                      {users.map(u => (
+                        <option key={u.id} value={u.id}>{u.username}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={saveOwner}
+                      disabled={saving}
+                      className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      Spara
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-700 w-20 shrink-0">Webhook</label>
+                    <input
+                      type="url"
+                      value={webhookEdit}
+                      onChange={e => setWebhookEdit(e.target.value)}
+                      placeholder={cert.notify_webhook ? '(konfigurerad — lämna tom för att behålla)' : 'https://hooks.mattermost.com/...'}
+                      className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={saveWebhook}
+                      disabled={saving}
+                      className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      Spara
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400">Lämna webhook tom = ägarens default-webhook används</p>
+                </div>
+              ) : (
+                <p className="text-gray-700 mt-1 text-sm">
+                  Ägare: {cert.owner ? cert.owner.username : '—'}
+                </p>
+              )}
+            </div>
             <div>
               <p className="text-xs text-gray-500 uppercase tracking-wider">Endpoints</p>
               {cert.endpoints?.length ? (

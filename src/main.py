@@ -232,16 +232,23 @@ class CertificateGuardian:
         return dict(row) if row else {}
     
     def send_daily_summary(self):
-        """Send daily summary of all expiring certificates"""
+        """Send daily summary of all expiring certificates (scan + EJBCA)"""
         if not self.notifier:
             return
-        
-        # Get all certificates expiring within 90 days
-        expiring = self.db.get_expiring_certificates(90)
-        
-        if expiring:
-            self.notifier.send_daily_summary(expiring)
-            logger.info(f"Sent daily summary with {len(expiring)} expiring certificates")
+
+        scan_expiring = self.db.get_expiring_certificates(90)
+        ejbca_expiring = self.db.get_expiring_ejbca_certificates(90)
+        for c in ejbca_expiring:
+            c.setdefault('host', c.get('ejbca_username') or c['subject'])
+            c.setdefault('port', None)
+            c.setdefault('owner', c.get('owner_username'))
+            c.setdefault('criticality', 'medium')
+        all_expiring = scan_expiring + ejbca_expiring
+
+        if all_expiring:
+            self.notifier.send_daily_summary(all_expiring)
+            logger.info(f"Sent daily summary with {len(all_expiring)} expiring certificates "
+                        f"({len(scan_expiring)} scan, {len(ejbca_expiring)} EJBCA)")
     
     def _send_security_alert_for_cert(self, cert_id: int, endpoint: dict, cert_info):
         """Send security alert for a single certificate with trust issues"""
@@ -274,6 +281,45 @@ class CertificateGuardian:
             self.notifier.send_security_alert(untrusted)
             logger.info(f"Sent security summary with {len(untrusted)} untrusted certificates")
     
+    def _check_ejbca_expiry(self):
+        """Send expiry alerts for EJBCA-sourced certificates."""
+        if not self.notifier:
+            return
+        thresholds = self.config.get('notification_thresholds',
+                                     self.config.get('notifications', {}).get('warning_days', [7, 14, 30]))
+        if not thresholds:
+            thresholds = [7, 14, 30]
+        expiring = self.db.get_expiring_ejbca_certificates(max(thresholds))
+        for cert in expiring:
+            days = cert['days_until_expiry']
+            matching = [t for t in thresholds if days <= t]
+            if not matching:
+                continue
+            target = min(matching)
+            if self.db.was_ejbca_notification_sent(cert['id'], target):
+                continue
+            # Webhook priority: cert-specific → owner default → global (None = global)
+            webhook = cert.get('notify_webhook') or cert.get('owner_notify_webhook') or None
+            if days <= 1:
+                notif_type = 'emergency'
+            elif days <= 7:
+                notif_type = 'critical'
+            elif days <= 30:
+                notif_type = 'warning'
+            else:
+                notif_type = 'info'
+            cert_data = self._get_certificate_data(cert['id'])
+            pseudo_ep = {
+                'host': cert.get('ejbca_username') or cert['subject'],
+                'port': None,
+                'owner': cert.get('owner_username'),
+                'criticality': 'medium',
+            }
+            success = self.notifier.send_expiry_alert(cert_data, pseudo_ep, days, webhook_url=webhook)
+            if success:
+                self.db.add_ejbca_notification(cert['id'], target, notif_type)
+                logger.info(f"EJBCA expiry alert sent for cert {cert['id']} (≤{target}d, type={notif_type})")
+
     def run_once(self):
         """Run one scan cycle"""
         logger.info("=== Starting scan cycle ===")
@@ -286,6 +332,7 @@ class CertificateGuardian:
         if deleted:
             logger.info(f"Cleaned up {deleted} orphaned certificate(s)")
         self._maybe_sync_ejbca()
+        self._check_ejbca_expiry()
         logger.info("=== Scan cycle complete ===")
 
     def _maybe_sync_ejbca(self):
