@@ -951,6 +951,7 @@ async def get_certificates(
             JOIN certificate_scans cs ON e.id = cs.endpoint_id
             WHERE cs.certificate_id = ?
             AND cs.status = 'success'
+            AND (e.endpoint_type IS NULL OR e.endpoint_type != 'ssh')
             AND cs.scanned_at = (
                 SELECT MAX(scanned_at)
                 FROM certificate_scans
@@ -1397,9 +1398,13 @@ async def get_endpoints(
     cursor = db.conn.cursor()
     for endpoint in endpoints:
         port = endpoint['port']
-        endpoint['endpoint_type'] = 'ssh' if port == 22 else ('ldaps' if port == 636 else 'tls')
+        # Use stored endpoint_type; fall back to port-based detection for legacy rows
+        endpoint_type = endpoint.get('endpoint_type') or (
+            'ssh' if port == 22 else ('ldaps' if port == 636 else 'tls')
+        )
+        endpoint['endpoint_type'] = endpoint_type
 
-        if port == 22:
+        if endpoint_type == 'ssh':
             cursor.execute("""
                 SELECT scanned_at,
                        CASE WHEN scan_error IS NULL THEN 'success' ELSE 'failed' END AS status
@@ -1770,8 +1775,9 @@ async def trigger_scan(
         host = endpoint['host']
         port = endpoint['port']
         eid = endpoint['id']
+        endpoint_type = endpoint.get('endpoint_type') or ('ssh' if port == 22 else 'tls')
 
-        if port == 22:
+        if endpoint_type == 'ssh':
             ssh_result = scan_ssh(host, port=port)
             task_db.add_ssh_scan(eid, ssh_result)
         else:
@@ -2381,13 +2387,16 @@ async def execute_sweep(sweep_id: int):
         certs_found = 0
         certs_failed = 0
         for result in open_ports:
+            ep_type = 'ssh' if result.port == 22 else ('ldaps' if result.port == 636 else 'tls')
+
             # Create endpoint with metadata from sweep config
             endpoint_id = db.add_endpoint(
                 host=result.ip,
                 port=result.port,
                 owner=sweep['owner'],
                 criticality=sweep['criticality'],
-                created_by=sweep.get('created_by')
+                created_by=sweep.get('created_by'),
+                endpoint_type=ep_type,
             )
 
             # Set webhook if configured
@@ -2397,7 +2406,16 @@ async def execute_sweep(sweep_id: int):
             # Record sweep result
             db.add_sweep_result(sweep_id, result.ip, result.port, "open", endpoint_id)
 
-            # Scan certificate immediately
+            # SSH endpoints: run SSH scan instead of TLS
+            if ep_type == 'ssh':
+                ssh_result = scan_ssh(result.ip, port=result.port)
+                db.add_ssh_scan(endpoint_id, ssh_result)
+                logger.info("Sweep [%s] ssh: %s:%d  %s",
+                            name, result.ip, result.port,
+                            ssh_result.server_software or 'unknown')
+                continue
+
+            # TLS/LDAPS endpoints: scan certificate immediately
             cert_info = scanner.scan_endpoint(result.ip, result.port)
             if cert_info:
                 cert_id = db.add_certificate(

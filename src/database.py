@@ -80,6 +80,13 @@ class Database:
             cursor.execute("ALTER TABLE endpoints ADD COLUMN created_by TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE endpoints ADD COLUMN endpoint_type TEXT DEFAULT 'tls'")
+            # Backfill existing rows based on port
+            cursor.execute("UPDATE endpoints SET endpoint_type = 'ssh'   WHERE port = 22  AND (endpoint_type IS NULL OR endpoint_type = 'tls')")
+            cursor.execute("UPDATE endpoints SET endpoint_type = 'ldaps' WHERE port = 636 AND (endpoint_type IS NULL OR endpoint_type = 'tls')")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         # Trusted CAs table (custom root certificates)
         cursor.execute("""
@@ -323,17 +330,19 @@ class Database:
 
     def add_endpoint(self, host: str, port: int, owner: str = None,
                      criticality: str = "medium", created_by: str = None,
-                     webhook_url: str = None) -> int:
+                     webhook_url: str = None, endpoint_type: str = None) -> int:
         """Add or update an endpoint"""
+        if endpoint_type is None:
+            endpoint_type = 'ssh' if port == 22 else ('ldaps' if port == 636 else 'tls')
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO endpoints (host, port, owner, criticality, created_by, webhook_url)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO endpoints (host, port, owner, criticality, created_by, webhook_url, endpoint_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(host, port) DO UPDATE SET
                 owner = excluded.owner,
                 criticality = excluded.criticality,
                 webhook_url = excluded.webhook_url
-        """, (host, port, owner, criticality, created_by, webhook_url))
+        """, (host, port, owner, criticality, created_by, webhook_url, endpoint_type))
         self.conn.commit()
         return cursor.lastrowid
     
@@ -1113,9 +1122,7 @@ class Database:
                     AND cs2.endpoint_id = e.id
                     AND cs2.status = 'success'
               )
-              AND NOT EXISTS (
-                  SELECT 1 FROM ssh_scans s WHERE s.endpoint_id = e.id
-              )
+              AND e.endpoint_type != 'ssh'
             ORDER BY e.host, e.port
         """)
         return [dict(row) for row in cursor.fetchall()]
@@ -1186,6 +1193,7 @@ class Database:
                 FROM ssh_scans s2
                 WHERE s2.endpoint_id = s.endpoint_id
             )
+            AND e.endpoint_type = 'ssh'
             ORDER BY e.host, e.port
         """)
         return [dict(row) for row in cursor.fetchall()]

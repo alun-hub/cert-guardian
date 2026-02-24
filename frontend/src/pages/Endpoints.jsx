@@ -311,7 +311,7 @@ export default function Endpoints() {
                 const lastScan = endpoint.last_scan
                 const daysLeft = lastScan ? Math.floor(lastScan.days_until_expiry) : null
 
-                const endpointType = endpoint.port === 22 ? 'ssh' : endpoint.port === 636 ? 'ldaps' : 'tls'
+                const endpointType = endpoint.endpoint_type || (endpoint.port === 22 ? 'ssh' : endpoint.port === 636 ? 'ldaps' : 'tls')
                 const TYPE_BADGE = {
                   tls:   { label: 'HTTPS', className: 'bg-blue-100 text-blue-700',   Icon: Lock },
                   ssh:   { label: 'SSH',   className: 'bg-purple-100 text-purple-700', Icon: Terminal },
@@ -350,7 +350,7 @@ export default function Endpoints() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {endpoint.port === 22 ? (
+                      {endpointType === 'ssh' ? (
                         <span className="text-sm text-gray-400">N/A</span>
                       ) : daysLeft !== null ? (
                         <span className={`text-sm font-medium ${getExpiryColor(daysLeft)}`}>
