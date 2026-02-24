@@ -22,14 +22,17 @@ Certificate Guardian kan hämta certifikat direkt från en EJBCA-server via REST
 | Funktion | Community | Enterprise |
 |----------|-----------|------------|
 | `GET /v1/ca` | ✅ (sedan 8.2) | ✅ |
-| `POST /v1/certificate/search` | ⚠️ Kan finnas, ej garanterat | ✅ |
-| `POST /v2/certificate/search` (paginerat) | ❌ | ✅ |
+| `POST /v1/certificate/search` | ✅ (max 400 per sida) | ✅ (max 1000 per sida) |
+| `POST /v2/certificate/search` (paginerat) | ⚠️ Endpoint finns men returnerar inga certifikat | ✅ |
 | mTLS-autentisering | ✅ | ✅ |
 | API-nyckel (Bearer token) | ❌ | ✅ |
 
-**Klienten auto-detekterar** vilken endpoint som finns:
-1. Probar `/v2/certificate/search` (Enterprise) — stödjer paginering med `current_page` (1-indexerat)
-2. Faller tillbaka på `/v1/certificate/search` (Community) — en enda sida med `max_number_of_results`
+**Klienten auto-detekterar** vilken endpoint som fungerar:
+1. Anropar `/v2/certificate/search` (Enterprise, paginerat med `current_page`)
+2. Om v2 svarar `404`/`405`/`501` **eller** returnerar tomma certifikat trots att `pagination_summary.total_certs > 0` (CE-beteende) — faller klienten automatiskt tillbaka till `/v1/certificate/search`
+3. v1-anropet begränsas till max 400 resultat per sida (CE-gräns)
+
+> **Community Edition-quirk:** I EJBCA CE finns `/v2/certificate/search`-endpointen och svarar HTTP 200 med korrekt `total_certs` i `pagination_summary`, men `certificates`-arrayen är alltid tom. Klienten detekterar detta och faller tillbaka till v1 automatiskt.
 
 > **Notera:** PrimeKey förvärvades av Keyfactor 2021. EJBCA heter nu officiellt "Keyfactor EJBCA". API:et är identiskt — samma kodbas, samma endpoints.
 
@@ -87,30 +90,69 @@ ejbca:
 | `api_key` | string | API-nyckel (används som Bearer-token) |
 | `ca_dn_filter` | string | Kommaseparerade CA-DN:er att filtrera på, tomt = alla |
 | `sync_interval_hours` | int | Timmar mellan automatiska synkar; `0` = manuellt |
-| `max_results_per_page` | int | Sidstorlek för paginering mot EJBCA API (max 1000) |
+| `max_results_per_page` | int | Sidstorlek för paginering mot EJBCA Enterprise v2 API (max 1000). CE v1 begränsas alltid till max 400 oavsett inställning. |
 
 ## Autentiseringsmetoder
 
 ### Klientcertifikat (mTLS) — rekommenderat
 
-EJBCA stöder mTLS nativt. Skapa ett klientcertifikat i EJBCA med rätt behörigheter:
+EJBCA stöder mTLS nativt. Skapa ett klientcertifikat via EJBCA CLI och lägg till det i en administratörsroll:
 
 ```bash
-# Skapa nycklar och CSR
-openssl req -newkey rsa:2048 -nodes \
-  -keyout client.key \
-  -out client.csr \
-  -subj "/CN=cert-guardian-client/O=MyOrg"
+# 1. Skapa en end entity med P12-token
+ejbca.sh ra addendentity \
+  --username cert-guardian \
+  --dn "CN=cert-guardian,O=MyOrg" \
+  --caname ManagementCA \
+  --type 1 \
+  --token P12 \
+  --password changeme
 
-# Signera med EJBCA (via EJBCA UI eller CLI)
-# Exportera certifikat som PEM
+# 2. Sätt lösenord i klartext (krävs för batch)
+ejbca.sh ra setclearpwd cert-guardian changeme
 
-# Testa anslutning manuellt
-curl --cert client.crt --key client.key \
-  https://ejbca.example.com/ejbca-rest-api/v1/ca
+# 3. Generera nyckelpar och certifikat (sparas i /opt/keyfactor/p12/)
+ejbca.sh batch --username cert-guardian
+
+# 4. Lägg till certifikatet i en administratörsroll
+ejbca.sh roles addrolemember \
+  --role "Super Administrator Role" \
+  --caname ManagementCA \
+  --with WITH_COMMONNAME \
+  --value cert-guardian
 ```
 
-Klistra sedan in innehållet i `client.crt` och `client.key` i Settings-UI:t eller direkt i `config.yaml`.
+Exportera sedan PEM-filer från P12:
+
+```bash
+# Extrahera certifikat och nyckel
+openssl pkcs12 -in cert-guardian.p12 -clcerts -nokeys \
+  -password pass:changeme -legacy \
+  | sed -n '/-----BEGIN/,/-----END/p' > cert-guardian.crt
+
+openssl pkcs12 -in cert-guardian.p12 -nocerts -nodes \
+  -password pass:changeme -legacy \
+  | sed -n '/-----BEGIN/,/-----END/p' > cert-guardian.key
+
+# Exportera CA-certifikatet (för ca_pem-fältet)
+ejbca.sh ca getcacert --caname ManagementCA -f managementca.pem
+
+# Testa anslutning manuellt
+curl --cert cert-guardian.crt --key cert-guardian.key \
+  --cacert managementca.pem \
+  https://ejbca.example.com:8443/ejbca/ejbca-rest-api/v1/ca
+```
+
+> **WildFly truststore:** EJBCA:s WildFly måste lita på den CA som utfärdat klientcertifikatet. Om klienten är utfärdad av ManagementCA och WildFly:s truststore är tom, lägg till CA-certifikatet:
+> ```bash
+> keytool -importcert -keystore standalone/configuration/truststore.jks \
+>   -storepass <truststore-lösenord> -alias ManagementCA \
+>   -file managementca.pem -noprompt
+> # Ladda om WildFly: bin/jboss-cli.sh --connect --command=":reload"
+> ```
+> Truststore-lösenordet finns i `standalone/configuration/standalone.xml` under `key-store name="httpsTS"`.
+
+Klistra sedan in innehållet i `cert-guardian.crt`, `cert-guardian.key` och `managementca.pem` i Settings-UI:t eller direkt i `config.yaml`.
 
 ### API-nyckel
 
@@ -144,10 +186,16 @@ run_once()
 Klienten väljer API-version via **lazy fallback** — ingen separat sondering görs:
 
 1. Första anropet görs alltid mot **`POST /v2/certificate/search`** (Enterprise, paginerat, `current_page` 1-indexerat).
-2. Om EJBCA svarar `404`, `405` eller `501` faller klienten automatiskt tillbaka till **`POST /v1/certificate/search`** (Community/äldre Enterprise, enkel sida med `max_number_of_results`). En `INFO`-loggpost skrivs.
-3. Alla andra HTTP-fel (t.ex. `401`, `403`) ger ett åtgärdsbart felmeddelande — se [Felsökning](#felsökning) nedan.
+2. Fallback till **`POST /v1/certificate/search`** sker om något av följande inträffar:
+   - EJBCA svarar `404`, `405` eller `501` (endpointen saknas)
+   - EJBCA svarar HTTP 200 men `certificates`-arrayen är tom trots att `pagination_summary.total_certs > 0` (CE-beteende)
+3. En `INFO`-loggpost skrivs vid fallback.
+4. Alla andra HTTP-fel (t.ex. `401`, `403`) ger ett åtgärdsbart felmeddelande — se [Felsökning](#felsökning) nedan.
 
-För Community-installationer med många certifikat: sätt `max_results_per_page: 1000` (max som EJBCA tillåter per sida). Alla certifikat över 1000 kommer **inte** att hämtas om v2 inte finns.
+**Community Edition-gränser för v1:**
+- Max **400** certifikat per anrop (Enterprise tillåter 1000)
+- Ingen paginering — enda sidan per CA-filter
+- Har du fler än 400 certifikat per CA: använd `ca_dn_filter` för att dela upp per CA, eller uppgradera till Enterprise
 
 ### Manuell synk via API
 
@@ -343,13 +391,36 @@ REST API-modulen är inte aktiverad i EJBCA. I Enterprise: kontrollera att `ejbc
 
 ### Färre certifikat än förväntat (Community)
 
-Community stödjer bara `/v1/certificate/search` utan paginering. Max antal certifikat som returneras styrs av `max_results_per_page` (max 1000). Om du har fler certifikat behöver du uppgradera till Enterprise för att få full täckning, eller använda `ca_dn_filter` för att dela upp hämtningen per CA.
+Community Edition returnerar max **400 certifikat per anrop** via `/v1/certificate/search` (EJBCA:s hårda gräns för CE). Klienten begränsar anropet automatiskt till 400. Om du har fler än 400 certifikat per CA:
+
+- Använd `ca_dn_filter` för att dela upp hämtningen per CA (varje CA-filter ger ett separat anrop à max 400)
+- Eller uppgradera till Enterprise för full paginering
+
+> **Notera:** Inställningen `max_results_per_page` påverkar bara Enterprise v2-paginering. För CE v1 gäller alltid max 400 oavsett inställning.
 
 ### Inga certifikat returneras
 
 - Kontrollera `ca_dn_filter` — ett felaktigt DN filtrerar bort allt
 - Verifiera att det finns certifikat med status `CERT_ACTIVE` i EJBCA
-- Öka `max_results_per_page` om du har fler än 1000 certifikat per sida
+- Kontrollera att REST API-protokollen är aktiverade i EJBCA (se nedan)
+
+### REST API-protokoll är inte aktiverade
+
+I EJBCA (även CE) är REST API-protokollen **inaktiverade som standard**. Aktivera dem via CLI:
+
+```bash
+# Inuti EJBCA-containern / på EJBCA-servern
+ejbca.sh config protocols enable "REST CA Management"
+ejbca.sh config protocols enable "REST Certificate Management"
+
+# Valfritt — behövs inte för cert-guardian men aktiverar v2-endpoint
+ejbca.sh config protocols enable "REST Certificate Management V2"
+
+# Kontrollera status
+ejbca.sh config protocols status
+```
+
+Om protokollen saknas i listan är EJBCA-versionen för gammal eller REST API-modulen inte installerad.
 
 ### Certifikat försvinner efter cleanup
 
