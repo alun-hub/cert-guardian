@@ -1,4 +1,4 @@
-import { Shield, Lock, Globe, AlertTriangle, Info, Terminal, Database, Key } from 'lucide-react'
+import { Shield, Lock, Globe, AlertTriangle, Info, Terminal, Database, Key, RefreshCw } from 'lucide-react'
 
 export default function About() {
   return (
@@ -364,17 +364,108 @@ export default function About() {
         </ul>
       </Section>
 
+      {/* EJBCA */}
+      <Section icon={<RefreshCw className="w-5 h-5 text-indigo-600" />} title="EJBCA / PrimeKey Integration">
+        <p>
+          Certificate Guardian kan synkronisera certifikat direkt från ett EJBCA-system via
+          REST API v1 och v2. Certifikat från EJBCA syns i Certificates-vyn med ett{' '}
+          <span className="bg-indigo-100 text-indigo-700 text-xs font-medium px-1.5 py-0.5 rounded">EJBCA</span>-märke
+          och behöver inga endpoints &mdash; de hämtas direkt från CA:n.
+        </p>
+
+        <h4 className="font-semibold text-gray-800 mt-5 mb-2">Synkronisering</h4>
+        <ul className="space-y-2">
+          <li>Synken körs automatiskt på ett konfigurerbart intervall (standard: 6 timmar) och kan även triggas manuellt från Settings &gt; EJBCA.</li>
+          <li>Autentisering stöds via klientcertifikat (mTLS) eller API-nyckel.</li>
+          <li>Ett valfritt <code className="bg-gray-100 px-1 rounded text-xs">ca_dn_filter</code> begränsar vilka CA:er som hämtas.</li>
+          <li>Synkloggen (antal hittade / nya / uppdaterade certifikat) visas i Settings och i den dagliga sammanfattningen.</li>
+        </ul>
+
+        <h4 className="font-semibold text-gray-800 mt-5 mb-2">Certifikatägarskap</h4>
+        <p className="mb-3">
+          Varje certifikat kan ha en ägaranvändare (<em>owner</em>) som kopplas till ett
+          cert-guardian-konto. Ägarskapet styr vilken Mattermost-webhook som används för
+          expiry-alerts när inget cert-specifikt webhook är konfigurerat.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-3">
+            <span className="font-semibold text-indigo-800 text-sm">Auto-mappning</span>
+            <p className="text-xs text-gray-700 mt-1">
+              Vid varje synk jämförs EJBCA:s <code className="bg-white px-0.5 rounded">username</code>-fält
+              mot befintliga cert-guardian-användare. Om matchning hittas sätts ägaren
+              automatiskt &mdash; utan att skriva över manuellt satta ägare.
+            </p>
+          </div>
+          <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-3">
+            <span className="font-semibold text-indigo-800 text-sm">Manuell tilldelning</span>
+            <p className="text-xs text-gray-700 mt-1">
+              Editor+ kan sätta eller rensa ägare via detaljvyn i Certificates-sidan.
+              En rullgardinsmeny visar alla registrerade användare.
+            </p>
+          </div>
+        </div>
+
+        <h4 className="font-semibold text-gray-800 mt-5 mb-2">Expiry-alerts för EJBCA-certifikat</h4>
+        <p className="mb-2">
+          EJBCA-certifikat saknar endpoints och faller igenom den vanliga skannerkedjan.
+          Därför körs en separat <code className="bg-gray-100 px-1 rounded text-xs">_check_ejbca_expiry()</code>-rutin
+          efter varje synk. Loggiken är densamma som för skannrade certifikat:
+        </p>
+        <ul className="space-y-1 mb-3">
+          <li>En alert per tröskel per certifikat (skickas aldrig om igen).</li>
+          <li>Trösklar från <code className="bg-gray-100 px-1 rounded text-xs">notification_thresholds</code> i config (standard: 7, 14, 30 dagar).</li>
+          <li>Typ avgörs av dagar kvar: <em>emergency</em> (&le;1d), <em>critical</em> (&le;7d), <em>warning</em> (&le;30d).</li>
+        </ul>
+
+        <h4 className="font-semibold text-gray-800 mt-4 mb-2">Webhook-prioritet</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border border-gray-200 rounded">
+            <thead className="bg-gray-50 text-left">
+              <tr>
+                <th className="px-4 py-2 font-medium text-gray-600">Prioritet</th>
+                <th className="px-4 py-2 font-medium text-gray-600">Källa</th>
+                <th className="px-4 py-2 font-medium text-gray-600">Konfigurerbar via</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              <tr>
+                <td className="px-4 py-2 font-medium">1 (högst)</td>
+                <td className="px-4 py-2">Cert-specifik webhook</td>
+                <td className="px-4 py-2 text-gray-600">Certificates &gt; detaljvy &gt; Webhook-fält (editor+)</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2 font-medium">2</td>
+                <td className="px-4 py-2">Ägarens default-webhook</td>
+                <td className="px-4 py-2 text-gray-600">User Management &gt; Edit User &gt; Mattermost-webhook (admin)</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2 font-medium">3 (fallback)</td>
+                <td className="px-4 py-2">Global webhook</td>
+                <td className="px-4 py-2 text-gray-600"><code className="bg-gray-100 px-1 rounded text-xs">config.yaml → mattermost.webhook_url</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-gray-500 mt-3">
+          Samma prioritetskedja gäller även för skannrade certifikat när ett per-cert webhook är satt.
+          Den dagliga sammanfattningen inkluderar EJBCA-certifikat tillsammans med skannrade certifikat.
+        </p>
+      </Section>
+
       {/* Notifications */}
       <Section title="Notifications">
         <p>
-          Alerts are sent via Mattermost incoming webhooks. Each HTTPS/LDAPS endpoint can have its
-          own webhook URL, or fall back to the global webhook configured in config.yaml.
-          SSH endpoints do not support per-endpoint webhooks.
+          Alerts skickas via Mattermost incoming webhooks. Webhook-prioriteten är:
+          cert-specifik → ägarens default → global (config.yaml). Varje HTTPS/LDAPS-endpoint
+          kan också ha ett eget webhook-URL, eller falla tillbaka på det globala.
+          SSH-endpoints stödjer inte per-endpoint webhooks.
         </p>
         <ul className="mt-3 space-y-2">
-          <li>Expiry alerts fire at configurable day thresholds (e.g. 90, 60, 30, 14, 7, 1).</li>
-          <li>Only one notification per threshold per certificate/endpoint pair (no repeats).</li>
-          <li>Security alerts fire immediately for self-signed or untrusted certificates.</li>
+          <li>Expiry alerts triggas vid konfigurerbara dagströskelär (t.ex. 90, 60, 30, 14, 7, 1).</li>
+          <li>Bara en notifiering per tröskel per certifikat/endpoint (skickas aldrig om igen).</li>
+          <li>Security alerts skickas omedelbart för självsignerade eller ej betrodda certifikat.</li>
+          <li>EJBCA-certifikat har sin egen alertkedja &mdash; se EJBCA-sektionen ovan.</li>
+          <li>Den dagliga sammanfattningen inkluderar alla certifikat (skannrade + EJBCA) som löper ut inom 90 dagar.</li>
         </ul>
       </Section>
 
@@ -399,14 +490,16 @@ export default function About() {
                 <td className="px-4 py-2 font-medium">Editor</td>
                 <td className="px-4 py-2 text-gray-700">
                   Everything a Viewer can do, plus: create/edit/delete their own endpoints and sweeps,
-                  trigger scans, manage trusted CAs, and test webhooks.
+                  trigger scans, manage trusted CAs, test webhooks, set certificate owners,
+                  and configure per-certificate webhook overrides.
                 </td>
               </tr>
               <tr>
                 <td className="px-4 py-2 font-medium">Admin</td>
                 <td className="px-4 py-2 text-gray-700">
                   Full access: manage all endpoints and sweeps regardless of owner, manage user accounts
-                  and roles, change scanner settings, view audit logs, configure SIEM forwarding and database health.
+                  and roles (incl. per-user Mattermost webhook), change scanner settings, view audit logs,
+                  configure SIEM forwarding, EJBCA sync settings, and database health.
                 </td>
               </tr>
             </tbody>
