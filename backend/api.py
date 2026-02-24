@@ -1286,12 +1286,14 @@ async def trigger_ejbca_sync(
         raise HTTPException(status_code=400, detail="EJBCA is not enabled or configured")
 
     def _do_sync():
+        # Each background task gets its own connection to avoid cross-thread SQLite errors
+        task_db = Database(db.db_path)
         try:
-            run_ejbca_sync(ejbca_cfg, db)
+            run_ejbca_sync(ejbca_cfg, task_db)
         except Exception as e:
             import logging as _log
             _log.getLogger(__name__).error(f"Background EJBCA sync error: {e}", exc_info=True)
-            db.add_ejbca_sync_log(0, 0, 0, 'failed', str(e))
+            task_db.add_ejbca_sync_log(0, 0, 0, 'failed', str(e))
 
     background_tasks.add_task(_do_sync)
 
@@ -1713,9 +1715,9 @@ async def trigger_scan(
 ):
     """Trigger certificate scan (editor+)"""
     
-    def _store_tls_scan(endpoint_id: int, cert_info):
+    def _store_tls_scan(endpoint_id: int, cert_info, task_db):
         """Store a TLS scan result in the database."""
-        cert_id = db.add_certificate(
+        cert_id = task_db.add_certificate(
             fingerprint=cert_info.fingerprint,
             subject=cert_info.subject,
             issuer=cert_info.issuer,
@@ -1757,13 +1759,13 @@ async def trigger_scan(
             oidc_config=cert_info.oidc_config,
             saml_config=cert_info.saml_config,
         )
-        db.add_scan(
+        task_db.add_scan(
             cert_id, endpoint_id, 'success',
             tls_version=cert_info.tls_version,
             cipher=cert_info.cipher,
         )
 
-    def _scan_one(endpoint: dict):
+    def _scan_one(endpoint: dict, task_db):
         """Scan a single endpoint, dispatching to SSH or TLS scanner."""
         host = endpoint['host']
         port = endpoint['port']
@@ -1771,30 +1773,32 @@ async def trigger_scan(
 
         if port == 22:
             ssh_result = scan_ssh(host, port=port)
-            db.add_ssh_scan(eid, ssh_result)
+            task_db.add_ssh_scan(eid, ssh_result)
         else:
             cert_info = scanner.scan_endpoint(host, port)
             if cert_info:
-                _store_tls_scan(eid, cert_info)
+                _store_tls_scan(eid, cert_info, task_db)
             else:
-                db.add_scan(0, eid, 'failed', 'Failed to retrieve certificate')
+                task_db.add_scan(0, eid, 'failed', 'Failed to retrieve certificate')
 
     def do_scan(endpoint_id: Optional[int] = None):
+        # Each background task gets its own connection to avoid cross-thread SQLite errors
+        task_db = Database(db.db_path)
         if endpoint_id:
             # Scan specific endpoint
-            cursor = db.conn.cursor()
+            cursor = task_db.conn.cursor()
             cursor.execute("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
             endpoint = cursor.fetchone()
             if not endpoint:
                 return
-            _scan_one(dict(endpoint))
+            _scan_one(dict(endpoint), task_db)
         else:
             # Scan all endpoints
-            for endpoint in db.get_all_endpoints():
-                _scan_one(endpoint)
+            for endpoint in task_db.get_all_endpoints():
+                _scan_one(endpoint, task_db)
 
         # Clean up orphaned certificates after scan
-        db.cleanup_orphaned_certificates()
+        task_db.cleanup_orphaned_certificates()
 
     background_tasks.add_task(do_scan, scan_request.endpoint_id)
 
