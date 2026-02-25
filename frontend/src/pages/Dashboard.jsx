@@ -90,14 +90,14 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-gray-500 mt-1">Certificate monitoring overview</p>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Dashboard</h1>
+          <p className="text-sm text-gray-400 mt-1">Certificate monitoring overview</p>
         </div>
         {isEditor && (
           <button
             onClick={handleScanAll}
             disabled={scanning}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-500 disabled:opacity-50 text-sm font-medium transition-colors shadow-sm"
           >
             <RefreshCw className={`w-4 h-4 ${scanning ? 'animate-spin' : ''}`} />
             {scanning ? 'Scanning...' : 'Scan All'}
@@ -178,9 +178,9 @@ export default function Dashboard() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Expiry Timeline */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-semibold mb-4">Certificate Expiry Timeline</h2>
-          <p className="text-sm text-gray-500 mb-4">Certificates expiring per month</p>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h2 className="text-base font-semibold text-gray-900 mb-1">Certificate Expiry Timeline</h2>
+          <p className="text-sm text-gray-400 mb-4">Certificates expiring per month</p>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={timeline}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -210,8 +210,8 @@ export default function Dashboard() {
         </div>
 
         {/* Recent Expiring Certificates */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-semibold mb-4">Urgent: Expiring Soon</h2>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h2 className="text-base font-semibold text-gray-900 mb-4">Urgent: Expiring Soon</h2>
           <div className="space-y-3">
             {recentCerts.length === 0 ? (
               <p className="text-gray-500 text-center py-8">
@@ -229,27 +229,40 @@ export default function Dashboard() {
   )
 }
 
-function StatCard({ title, value, subtitle, icon, color }) {
-  const colors = {
-    blue: 'bg-blue-50 border-blue-200',
-    yellow: 'bg-yellow-50 border-yellow-200',
-    red: 'bg-red-50 border-red-200',
-    orange: 'bg-orange-50 border-orange-200',
-    gray: 'bg-gray-50 border-gray-200',
-    purple: 'bg-purple-50 border-purple-200',
-  }
+const STAT_ACCENT = {
+  blue: '#3b82f6',
+  yellow: '#eab308',
+  red: '#ef4444',
+  orange: '#f97316',
+  gray: '#9ca3af',
+  purple: '#a855f7',
+}
 
+const STAT_ICON_BG = {
+  blue: 'bg-blue-50 text-blue-500',
+  yellow: 'bg-yellow-50 text-yellow-500',
+  red: 'bg-red-50 text-red-500',
+  orange: 'bg-orange-50 text-orange-500',
+  gray: 'bg-gray-100 text-gray-500',
+  purple: 'bg-purple-50 text-purple-500',
+}
+
+function StatCard({ title, value, subtitle, icon, color }) {
   return (
-    <div className={`${colors[color]} border rounded-lg p-6`}>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-gray-600 font-medium">{title}</p>
-          <p className="text-3xl font-bold mt-2">{value}</p>
+    <div className="relative bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow overflow-hidden">
+      {/* Accent stripe */}
+      <div className="absolute top-0 left-0 right-0 h-0.5" style={{ backgroundColor: STAT_ACCENT[color] }} />
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{title}</p>
+          <p className="text-3xl font-bold mt-2 text-gray-900 tabular-nums leading-none">{value}</p>
           {subtitle && (
-            <p className="text-xs text-gray-500 mt-1">{subtitle}</p>
+            <p className="text-xs text-gray-400 mt-1.5">{subtitle}</p>
           )}
         </div>
-        <div>{icon}</div>
+        <div className={`p-2 rounded-lg flex-shrink-0 ${STAT_ICON_BG[color]}`}>
+          {icon}
+        </div>
       </div>
     </div>
   )
