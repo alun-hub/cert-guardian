@@ -17,6 +17,9 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      dnsConfig:
+        {{- toYaml .Values.dnsConfig | nindent 8 }}
       containers:
         - name: backend
           image: "{{ .Values.image.backend.repository }}:{{ .Values.image.backend.tag }}"

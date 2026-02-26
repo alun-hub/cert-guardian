@@ -1,0 +1,28 @@
+securityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+  allowPrivilegeEscalation: true
+  capabilities:
+    drop: []
+
+image:
+  backend:
+    repository: localhost/cert-guardian_backend
+    tag: latest
+    pullPolicy: Never
+  frontend:
+    repository: localhost/cert-guardian_frontend
+    tag: latest
+    pullPolicy: Never
+  scanner:
+    repository: localhost/cert-guardian_scanner
+    tag: latest
+    pullPolicy: Never
+
+ingress:
+  enabled: true
+  hosts:
+    - host: certs.192.168.1.176.nip.io
+      paths:
+        - path: /
+          pathType: Prefix

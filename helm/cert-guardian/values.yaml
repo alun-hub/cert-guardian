@@ -120,3 +120,17 @@ securityContext:
 
 # Timezone
 timezone: "Europe/Stockholm"
+
+# DNS configuration for pods
+# dnsPolicy: None gives full control and prevents inheriting node search domains
+dnsPolicy: None
+dnsConfig:
+  nameservers:
+    - 10.43.0.10  # CoreDNS cluster IP
+  searches:
+    - cert-guardian.svc.cluster.local
+    - svc.cluster.local
+    - cluster.local
+  options:
+    - name: ndots
+      value: "2"

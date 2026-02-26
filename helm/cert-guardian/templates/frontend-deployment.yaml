@@ -15,6 +15,9 @@ spec:
       labels:
         {{- include "cert-guardian.frontendSelectorLabels" . | nindent 8 }}
     spec:
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      dnsConfig:
+        {{- toYaml .Values.dnsConfig | nindent 8 }}
       containers:
         - name: frontend
           image: "{{ .Values.image.frontend.repository }}:{{ .Values.image.frontend.tag }}"
