@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cert-guardian</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:ital,wght@0,300;0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:          #060810;
+  --card:        #0b0e1d;
+  --border:      #16203a;
+  --accent:      #4f9cff;
+  --accent-dim:  #1a3a6a;
+  --accent-glow: rgba(79,156,255,0.13);
+  --purple:      #a78bfa;
+  --purple-dim:  #3b2d6e;
+  --teal:        #2dd4bf;
+  --teal-dim:    #0d4a43;
+  --red:         #f87171;
+  --red-dim:     #2d0c0c;
+  --amber:       #fbbf24;
+  --green:       #34d399;
+  --text:        #b4c6d8;
+  --text-dim:    #3a4e65;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  cursor: none;
+  user-select: none;
+}
+
+/* ── Scanlines ── */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0,0,0,0.09) 2px, rgba(0,0,0,0.09) 4px
+  );
+  pointer-events: none; z-index: 900;
+}
+
+/* ── CRT Vignette ── */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,0.75) 100%);
+  pointer-events: none; z-index: 901;
+}
+
+/* ── Grain noise ── */
+.grain {
+  position: fixed; inset: 0;
+  opacity: 0.022;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  pointer-events: none; z-index: 902;
+}
+
+/* ── Custom cursor ── */
+#cursor {
+  position: fixed;
+  width: 8px; height: 8px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 9999;
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%);
+}
+
+/* ── Corner marks ── */
+.corner { position: fixed; width: 18px; height: 18px; z-index: 800; }
+.c-tl { top: 18px; left: 18px; border-top: 1px solid var(--accent-dim); border-left: 1px solid var(--accent-dim); }
+.c-tr { top: 18px; right: 18px; border-top: 1px solid var(--accent-dim); border-right: 1px solid var(--accent-dim); }
+.c-bl { bottom: 18px; left: 18px; border-bottom: 1px solid var(--accent-dim); border-left: 1px solid var(--accent-dim); }
+.c-br { bottom: 18px; right: 18px; border-bottom: 1px solid var(--accent-dim); border-right: 1px solid var(--accent-dim); }
+
+/* ── HUD ── */
+#counter {
+  position: fixed; top: 24px; right: 40px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--text-dim);
+  letter-spacing: 0.15em; z-index: 800;
+}
+
+#progress {
+  position: fixed; bottom: 28px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; gap: 8px; z-index: 800;
+}
+
+.dot {
+  width: 5px; height: 5px;
+  border: 1px solid var(--accent-dim);
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.dot.active { background: var(--accent); transform: scale(1.5); }
+
+.nav-hint {
+  position: fixed; bottom: 28px; right: 40px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--text-dim);
+  letter-spacing: 0.12em; z-index: 800;
+}
+
+/* ── Slide engine ── */
+.slides { position: relative; width: 100%; height: 100%; }
+
+.slide {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 64px 80px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.45s ease, transform 0.45s ease;
+}
+
+.slide.enter-right  { transform: translateX(48px); }
+.slide.enter-left   { transform: translateX(-48px); }
+.slide.active       { opacity: 1; transform: translateX(0); pointer-events: all; }
+.slide.exit-left    { opacity: 0; transform: translateX(-48px); }
+.slide.exit-right   { opacity: 0; transform: translateX(48px); }
+
+/* ════════════════════════════════════════════
+   SHARED COMPONENTS
+════════════════════════════════════════════ */
+.slide-heading {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 52px; color: var(--accent);
+  text-align: center; margin-bottom: 44px;
+  letter-spacing: 0.04em;
+}
+
+.badge {
+  display: inline-block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 2px;
+}
+
+.badge-blue   { background: rgba(79,156,255,0.15); color: var(--accent); }
+.badge-purple { background: rgba(167,139,250,0.15); color: var(--purple); }
+.badge-teal   { background: rgba(45,212,191,0.15); color: var(--teal); }
+
+/* animated packet on connection line */
+@keyframes flow {
+  0%   { left: -5px; opacity: 0; }
+  8%   { opacity: 1; }
+  92%  { opacity: 1; }
+  100% { left: calc(100% + 5px); opacity: 0; }
+}
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* ════════════════════════════════════════════
+   SLIDE 1 — TITLE
+════════════════════════════════════════════ */
+.s-title { flex-direction: column; text-align: center; position: relative; }
+
+.title-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+.title-grid::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 50%, var(--bg) 28%, transparent 75%);
+}
+
+.title-eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; letter-spacing: 0.32em;
+  color: var(--accent); text-transform: uppercase;
+  margin-bottom: 28px; position: relative; z-index: 1;
+}
+
+.title-main {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(80px, 13vw, 180px);
+  line-height: 0.88; letter-spacing: 0.01em;
+  color: #fff; position: relative; z-index: 1;
+}
+
+.title-main .sep { color: var(--accent); }
+
+.title-cursor {
+  display: inline-block;
+  width: 0.055em; height: 0.8em;
+  background: var(--accent);
+  vertical-align: middle;
+  margin-left: 6px;
+  animation: blink 1s step-end infinite;
+  box-shadow: 0 0 12px var(--accent);
+}
+
+.title-tagline {
+  font-size: 15px; font-weight: 300;
+  color: var(--text-dim); line-height: 1.75;
+  margin-top: 30px; max-width: 580px;
+  position: relative; z-index: 1;
+}
+
+.title-prompt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--accent-dim);
+  margin-top: 40px; position: relative; z-index: 1;
+}
+
+.title-proto-row {
+  display: flex; gap: 10px; justify-content: center;
+  margin-top: 18px; position: relative; z-index: 1;
+}
+
+/* ════════════════════════════════════════════
+   SLIDE 2 — PROBLEM
+════════════════════════════════════════════ */
+.s-problem { gap: 64px; align-items: center; }
+
+.prob-left { flex: 1; }
+
+.prob-left h2 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(52px, 7vw, 84px);
+  line-height: 0.88; color: var(--red);
+  margin-bottom: 28px;
+}
+
+.prob-left .lead {
+  font-size: 15px; line-height: 1.8; color: var(--text);
+  margin-bottom: 18px;
+}
+
+.prob-left .sub {
+  font-size: 12.5px; color: var(--text-dim); line-height: 1.65;
+}
+
+.prob-right { flex: 1; }
+
+.scan-log {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 18px 20px 16px;
+}
+
+.scan-log-header {
+  font-size: 9px; letter-spacing: 0.2em;
+  color: var(--text-dim); text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px; margin-bottom: 14px;
+}
+
+.scan-row {
+  display: grid;
+  grid-template-columns: 16px 1fr 100px;
+  gap: 10px;
+  margin-bottom: 10px;
+  align-items: start;
+}
+
+.scan-row .s-icon { padding-top: 1px; }
+.scan-row .s-host { color: var(--text); line-height: 1.5; }
+.scan-row .s-host small { display: block; font-size: 9.5px; color: var(--text-dim); margin-top: 2px; }
+.scan-row .s-tag {
+  text-align: right; font-size: 9.5px; letter-spacing: 0.1em; font-weight: 700; padding-top: 2px;
+}
+
+.scan-row.ok  .s-icon { color: var(--green); }
+.scan-row.err .s-icon { color: var(--red); }
+.scan-row.warn .s-icon { color: var(--amber); }
+.scan-row.ok  .s-tag { color: var(--green); }
+.scan-row.err .s-tag { color: var(--red); }
+.scan-row.warn .s-tag { color: var(--amber); }
+
+.scan-footer {
+  margin-top: 14px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 10px; color: var(--text-dim);
+  display: flex; justify-content: space-between;
+}
+
+/* ════════════════════════════════════════════
+   SLIDE 3 — ARCHITECTURE
+════════════════════════════════════════════ */
+.s-arch { flex-direction: column; width: 100%; max-width: 1080px; }
+
+.arch-row {
+  display: flex; align-items: center; justify-content: center;
+}
+
+.a-box {
+  flex: 1; max-width: 210px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 26px 20px;
+  text-align: center;
+  transition: border-color 0.3s;
+}
+
+.a-box:hover { border-color: var(--accent-dim); }
+
+.a-box .a-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; letter-spacing: 0.25em;
+  color: var(--accent); text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.a-box .a-name {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 30px; color: #fff;
+  margin-bottom: 10px; letter-spacing: 0.05em;
+}
+
+.a-box .a-desc {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--text-dim); line-height: 1.65;
+}
+
+.a-box.glow { border-color: var(--accent-dim); box-shadow: 0 0 28px var(--accent-glow); }
+
+.a-conn {
+  min-width: 72px;
+  display: flex; flex-direction: column;
+  align-items: center; padding: 0 4px;
+}
+
+.a-conn .line {
+  width: 100%; height: 1px;
+  background: var(--accent-dim);
+  position: relative; overflow: hidden;
+}
+
+.a-conn .pkt {
+  position: absolute;
+  width: 5px; height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  top: -2px; left: -5px;
+  box-shadow: 0 0 6px var(--accent);
+  animation: flow 2.4s linear infinite;
+}
+
+.a-conn .pkt2 { animation-delay: 1.2s; }
+
+.a-conn .proto {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--text-dim);
+  margin-top: 7px; letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+
+.arch-dispatch {
+  margin-top: 36px;
+  display: flex; gap: 12px; justify-content: center;
+  flex-wrap: wrap;
+}
+
+.dispatch-item {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 10px;
+}
+
+.dispatch-item .d-port { color: var(--text-dim); }
+.dispatch-item .d-arr  { color: var(--text-dim); }
+
+/* ════════════════════════════════════════════
+   SLIDE 4 — MULTI-PROTOCOL
+════════════════════════════════════════════ */
+.s-proto { flex-direction: column; width: 100%; max-width: 1060px; }
+
+.proto-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.proto-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 26px 22px;
+  transition: border-color 0.25s;
+}
+
+.proto-card.blue-card   { border-top: 2px solid var(--accent); }
+.proto-card.purple-card { border-top: 2px solid var(--purple); }
+.proto-card.teal-card   { border-top: 2px solid var(--teal); }
+
+.proto-card:hover { border-color: var(--accent-dim); }
+.proto-card.purple-card:hover { border-color: var(--purple-dim); }
+.proto-card.teal-card:hover   { border-color: var(--teal-dim); }
+
+.proto-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+}
+
+.proto-name {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 34px; color: #fff; letter-spacing: 0.05em;
+}
+
+.proto-port {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--text-dim);
+  margin-top: 6px;
+}
+
+.proto-checks {
+  list-style: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px; color: var(--text-dim); line-height: 2;
+}
+
+.proto-checks li::before { content: '→ '; }
+.blue-card   .proto-checks li::before { color: var(--accent); }
+.purple-card .proto-checks li::before { color: var(--purple); }
+.teal-card   .proto-checks li::before { color: var(--teal); }
+
+.proto-finding {
+  margin-top: 18px; padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; color: var(--text-dim); line-height: 1.9;
+}
+
+.proto-finding .f-head {
+  letter-spacing: 0.15em; text-transform: uppercase; font-size: 9px;
+  margin-bottom: 6px;
+}
+
+.blue-card   .f-head { color: var(--accent); }
+.purple-card .f-head { color: var(--purple); }
+.teal-card   .f-head { color: var(--teal); }
+
+.finding-tag {
+  display: inline-block;
+  font-size: 9px; padding: 1px 6px;
+  border-radius: 2px; margin: 1px 2px 1px 0;
+  background: var(--card); border: 1px solid var(--border);
+}
+
+.finding-tag.critical { border-color: var(--red);   color: var(--red); }
+.finding-tag.high     { border-color: var(--amber);  color: var(--amber); }
+.finding-tag.medium   { border-color: #a78bfa;        color: #a78bfa; }
+.finding-tag.low      { border-color: var(--text-dim); color: var(--text-dim); }
+.finding-tag.ok       { border-color: var(--green);  color: var(--green); }
+
+/* ════════════════════════════════════════════
+   SLIDE 5 — SECURITY FINDINGS
+════════════════════════════════════════════ */
+.s-security { flex-direction: column; width: 100%; max-width: 980px; }
+
+.sec-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+.sec-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 20px 20px 18px;
+  transition: border-color 0.25s;
+}
+
+.sec-card:hover { border-color: var(--accent-dim); }
+
+.sec-cat {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; letter-spacing: 0.25em; text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.sec-cat.c-cert    { color: var(--accent); }
+.sec-cat.c-tls     { color: var(--accent); }
+.sec-cat.c-headers { color: var(--amber); }
+.sec-cat.c-ssh     { color: var(--purple); }
+.sec-cat.c-ldap    { color: var(--teal); }
+.sec-cat.c-auth    { color: #f472b6; }
+
+.sec-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 26px; color: #fff; letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.sec-findings {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--text-dim); line-height: 1.85;
+}
+
+.sec-findings .f { display: flex; gap: 6px; align-items: baseline; }
+.sec-findings .sev { flex-shrink: 0; font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em; }
+
+.sev-C { color: var(--red); }
+.sev-H { color: var(--amber); }
+.sev-M { color: #a78bfa; }
+.sev-L { color: var(--text-dim); }
+
+/* ════════════════════════════════════════════
+   SLIDE 6 — WEB DASHBOARD
+════════════════════════════════════════════ */
+.s-dash { gap: 56px; align-items: center; width: 100%; max-width: 1100px; }
+
+.dash-left { flex: 1.1; }
+
+.dash-left h2 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(48px, 6vw, 76px);
+  line-height: 0.9; color: var(--accent);
+  margin-bottom: 22px; letter-spacing: 0.03em;
+}
+
+.dash-feat-list {
+  list-style: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px; color: var(--text-dim); line-height: 2.1;
+}
+
+.dash-feat-list li::before { content: '→ '; color: var(--accent); }
+.dash-feat-list .hl { color: var(--text); }
+
+.dash-right { flex: 1.3; }
+
+.dash-mock {
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  box-shadow: 0 0 40px var(--accent-glow);
+}
+
+.dash-bar {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 14px;
+  background: #0e1326;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px; color: var(--text-dim);
+}
+
+.dash-bar .dd { width: 9px; height: 9px; border-radius: 50%; }
+.dd-r { background: #f87171; }
+.dd-a { background: #fbbf24; }
+.dd-g { background: #34d399; }
+.dash-bar .dt { flex: 1; text-align: center; font-size: 9px; letter-spacing: 0.15em; }
+
+.dash-nav {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  font-size: 9.5px;
+}
+
+.dash-nav .dn {
+  padding: 8px 16px; color: var(--text-dim);
+  border-right: 1px solid var(--border);
+  letter-spacing: 0.08em;
+}
+
+.dash-nav .dn.act { color: var(--accent); border-bottom: 1px solid var(--accent); }
+
+.dash-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+
+.ds {
+  padding: 14px 12px; text-align: center;
+  border-right: 1px solid var(--border);
+}
+
+.ds:last-child { border-right: 0; }
+
+.ds .ds-num {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 30px; display: block;
+}
+
+.ds .ds-label { font-size: 9px; color: var(--text-dim); letter-spacing: 0.12em; }
+.ds.blue .ds-num   { color: var(--accent); }
+.ds.red  .ds-num   { color: var(--red); }
+.ds.amber .ds-num  { color: var(--amber); }
+.ds.green .ds-num  { color: var(--green); }
+
+.dash-rows { padding: 10px 0; }
+
+.dr {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 14px;
+  font-size: 10px; border-bottom: 1px solid rgba(22,32,58,0.6);
+}
+
+.dr:last-child { border-bottom: none; }
+.dr .dr-host { flex: 1; color: var(--text); }
+.dr .dr-badge { font-size: 8.5px; padding: 2px 6px; border-radius: 2px; }
+.dr .dr-days { text-align: right; font-size: 9.5px; min-width: 60px; }
+
+.dr.err  .dr-badge { background: rgba(248,113,113,0.15); color: var(--red); }
+.dr.warn .dr-badge { background: rgba(251,191,36,0.15);  color: var(--amber); }
+.dr.ok   .dr-badge { background: rgba(52,211,153,0.12);  color: var(--green); }
+.dr.err  .dr-days  { color: var(--red); }
+.dr.warn .dr-days  { color: var(--amber); }
+.dr.ok   .dr-days  { color: var(--green); }
+
+/* ════════════════════════════════════════════
+   SLIDE 7 — EJBCA
+════════════════════════════════════════════ */
+.s-ejbca { gap: 56px; align-items: center; width: 100%; max-width: 1100px; }
+
+.ejbca-left { flex: 1; }
+
+.ejbca-left h2 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(48px, 6vw, 72px);
+  line-height: 0.9; color: #fff;
+  margin-bottom: 6px; letter-spacing: 0.03em;
+}
+
+.ejbca-left .ej-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--accent);
+  letter-spacing: 0.2em; text-transform: uppercase;
+  margin-bottom: 24px;
+}
+
+.ejbca-left .lead {
+  font-size: 14px; line-height: 1.8; color: var(--text); margin-bottom: 20px;
+}
+
+.ej-feat-list {
+  list-style: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px; color: var(--text-dim); line-height: 2;
+}
+
+.ej-feat-list li::before { content: '→ '; color: var(--accent); }
+
+.ejbca-right { flex: 1; }
+
+.ej-compare {
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.ej-compare-header {
+  display: grid; grid-template-columns: 1fr 1fr;
+  background: #0e1326;
+  border-bottom: 1px solid var(--border);
+}
+
+.ej-col-head {
+  padding: 10px 16px;
+  font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
+}
+
+.ej-col-head:first-child {
+  color: var(--text-dim);
+  border-right: 1px solid var(--border);
+}
+
+.ej-col-head:last-child { color: var(--accent); }
+
+.ej-row {
+  display: grid; grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+}
+
+.ej-row:last-child { border-bottom: none; }
+
+.ej-cell {
+  padding: 10px 16px; font-size: 10.5px; color: var(--text-dim); line-height: 1.5;
+}
+
+.ej-cell:first-child { border-right: 1px solid var(--border); }
+.ej-cell.good { color: var(--green); }
+
+.ej-auth-row {
+  display: flex; gap: 10px;
+  margin-top: 20px;
+}
+
+.ej-auth-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; padding: 6px 12px;
+  background: var(--card); border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+/* ════════════════════════════════════════════
+   SLIDE 8 — DEPLOY / SUMMARY
+════════════════════════════════════════════ */
+.s-deploy { flex-direction: column; width: 100%; max-width: 900px; text-align: center; }
+
+.s-deploy h2 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(56px, 9vw, 108px);
+  line-height: 0.9; color: #fff; margin-bottom: 8px;
+}
+
+.s-deploy .sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; color: var(--accent);
+  letter-spacing: 0.28em; margin-bottom: 44px;
+}
+
+.feat-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 7px; text-align: left; margin-bottom: 40px;
+}
+
+.feat {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--text);
+  padding: 10px 14px;
+  border-left: 2px solid var(--accent-dim);
+  background: var(--card);
+  line-height: 1.5;
+}
+
+.feat .arr  { color: var(--accent); margin-right: 6px; }
+.feat .star { color: var(--amber);  margin-right: 6px; }
+
+.gh-link {
+  display: inline-block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; letter-spacing: 0.12em;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 12px 36px;
+  text-decoration: none;
+  transition: border-color 0.25s, color 0.25s;
+  cursor: none;
+}
+
+.gh-link:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="grain"></div>
+<div id="cursor"></div>
+<div class="corner c-tl"></div>
+<div class="corner c-tr"></div>
+<div class="corner c-bl"></div>
+<div class="corner c-br"></div>
+<div id="counter">01 / 08</div>
+<div id="progress"></div>
+<div class="nav-hint">← → navigate</div>
+
+<div class="slides" id="slides">
+
+  <!-- ░░ SLIDE 1: TITLE ░░ -->
+  <div class="slide active" id="s0">
+    <div class="title-grid"></div>
+    <div class="s-title">
+      <div class="title-eyebrow">TLS &nbsp;·&nbsp; SSH &nbsp;·&nbsp; LDAPS &nbsp;·&nbsp; HTTP &nbsp;·&nbsp; OIDC/SAML</div>
+      <div class="title-main">
+        CERT<span class="sep">·</span>GUARDIAN<span class="title-cursor"></span>
+      </div>
+      <div class="title-proto-row">
+        <span class="badge badge-blue">HTTPS</span>
+        <span class="badge badge-purple">SSH</span>
+        <span class="badge badge-teal">LDAPS</span>
+      </div>
+      <div class="title-tagline">
+        Multi-protocol certificate expiry monitoring and security analysis.<br>
+        TLS · SSH host keys · HTTP headers · OIDC/SAML authentication.
+      </div>
+      <div class="title-prompt">$ podman-compose -f docker-compose-webapp.yaml up -d --build &nbsp;<span style="color:var(--accent);animation:blink 1s step-end infinite;display:inline-block">█</span></div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 2: PROBLEM ░░ -->
+  <div class="slide" id="s1">
+    <div class="s-problem" style="display:flex;width:100%;max-width:1100px;gap:64px;align-items:center;">
+      <div class="prob-left">
+        <h2>THE<br>SILENT<br>FAILURE</h2>
+        <p class="lead">
+          Certificates expire at 3 AM. Services go dark before anyone notices.
+          SSH servers advertise decade-old key exchange algorithms.
+          OIDC providers accept unsigned tokens. None of this triggers an alert.
+        </p>
+        <p class="sub">
+          Without continuous multi-protocol scanning, your certificate inventory
+          is a snapshot from the last time someone checked manually —
+          which was probably months ago.
+        </p>
+      </div>
+      <div class="prob-right">
+        <div class="scan-log">
+          <div class="scan-log-header">cert-guardian scan — 2026-02-19 03:42 UTC &nbsp;·&nbsp; 12 endpoints</div>
+
+          <div class="scan-row err">
+            <span class="s-icon">✗</span>
+            <span class="s-host">
+              api.prod.example.com:443
+              <small>CERT_EXPIRED &nbsp; not_after=2026-02-16</small>
+            </span>
+            <span class="s-tag">EXPIRED</span>
+          </div>
+
+          <div class="scan-row err">
+            <span class="s-icon">✗</span>
+            <span class="s-host">
+              ssh.bastion.internal:22
+              <small>SSH_WEAK_KEX &nbsp; diffie-hellman-group1-sha1</small>
+            </span>
+            <span class="s-tag">CRITICAL</span>
+          </div>
+
+          <div class="scan-row err">
+            <span class="s-icon">✗</span>
+            <span class="s-host">
+              idp.sso.example.com:443
+              <small>OIDC_NONE_ALG &nbsp; alg=none permitted</small>
+            </span>
+            <span class="s-tag">CRITICAL</span>
+          </div>
+
+          <div class="scan-row warn">
+            <span class="s-icon">⚠</span>
+            <span class="s-host">
+              mail.company.com:465
+              <small>CERT_EXPIRING &nbsp; 29 days remaining</small>
+            </span>
+            <span class="s-tag">WARNING</span>
+          </div>
+
+          <div class="scan-row ok">
+            <span class="s-icon">✓</span>
+            <span class="s-host">
+              vpn.corp.example.com:443
+              <small>CERT_OK &nbsp; 212 days · TLS 1.3</small>
+            </span>
+            <span class="s-tag">OK</span>
+          </div>
+
+          <div class="scan-footer">
+            <span>5 of 12 shown</span>
+            <span style="color:var(--red)">3 critical &nbsp; 1 warning</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 3: ARCHITECTURE ░░ -->
+  <div class="slide" id="s2">
+    <div class="s-arch">
+      <div class="slide-heading">HOW IT WORKS</div>
+      <div class="arch-row">
+
+        <div class="a-box glow">
+          <div class="a-label">Scanner Container</div>
+          <div class="a-name">SCANNER</div>
+          <div class="a-desc">
+            Dispatches by port.<br>
+            TLS · SSH · LDAPS · HTTP<br>
+            OIDC/SAML · CAA · CORS<br>
+            Runs hourly or on demand.
+          </div>
+        </div>
+
+        <div class="a-conn">
+          <div class="line">
+            <div class="pkt"></div>
+            <div class="pkt pkt2"></div>
+          </div>
+          <div class="proto">findings</div>
+        </div>
+
+        <div class="a-box glow">
+          <div class="a-label">Persistence</div>
+          <div class="a-name">SQLITE</div>
+          <div class="a-desc">
+            50+ fields per cert.<br>
+            Scan history.<br>
+            SSH scans table.<br>
+            EJBCA sync log.
+          </div>
+        </div>
+
+        <div class="a-conn">
+          <div class="line">
+            <div class="pkt" style="animation-delay:0.6s"></div>
+            <div class="pkt pkt2" style="animation-delay:1.8s"></div>
+          </div>
+          <div class="proto">REST + JWT</div>
+        </div>
+
+        <div class="a-box glow">
+          <div class="a-label">Backend</div>
+          <div class="a-name">FASTAPI</div>
+          <div class="a-desc">
+            RBAC: Viewer / Editor / Admin.<br>
+            Local · Pomerium · Keycloak.<br>
+            Prometheus /metrics.<br>
+            Audit log.
+          </div>
+        </div>
+
+        <div class="a-conn">
+          <div class="line">
+            <div class="pkt" style="animation-delay:1.2s"></div>
+            <div class="pkt pkt2" style="animation-delay:2.4s"></div>
+          </div>
+          <div class="proto">HTTP/REST</div>
+        </div>
+
+        <div class="a-box glow">
+          <div class="a-label">Frontend</div>
+          <div class="a-name">REACT</div>
+          <div class="a-desc">
+            Recharts dashboard.<br>
+            Security findings tabs.<br>
+            Endpoint type badges.<br>
+            Non-blocking scanning.
+          </div>
+        </div>
+
+      </div>
+
+      <div class="arch-dispatch">
+        <div class="dispatch-item">
+          <span class="d-port">port 22</span>
+          <span class="d-arr">→</span>
+          <span class="badge badge-purple">SSH</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--text-dim)">host keys · KEX algorithms</span>
+        </div>
+        <div class="dispatch-item">
+          <span class="d-port">port 636</span>
+          <span class="d-arr">→</span>
+          <span class="badge badge-teal">LDAPS</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--text-dim)">TLS cert · anon bind · plaintext</span>
+        </div>
+        <div class="dispatch-item">
+          <span class="d-port">other</span>
+          <span class="d-arr">→</span>
+          <span class="badge badge-blue">HTTPS</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--text-dim)">cert · headers · OIDC/SAML · CAA</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 4: MULTI-PROTOCOL ░░ -->
+  <div class="slide" id="s3">
+    <div class="s-proto">
+      <div class="slide-heading">MULTI-PROTOCOL SCANNING</div>
+      <div class="proto-grid">
+
+        <div class="proto-card blue-card">
+          <div class="proto-header">
+            <div>
+              <div class="proto-name">HTTPS / TLS</div>
+              <div class="proto-port">port 443 (and others)</div>
+            </div>
+            <span class="badge badge-blue">HTTPS</span>
+          </div>
+          <ul class="proto-checks">
+            <li>Certificate chain &amp; trust validation</li>
+            <li>TLS version, cipher suite</li>
+            <li>Key type, size, signature algorithm</li>
+            <li>SAN / hostname matching</li>
+            <li>OCSP, CRL, EKU, CAA records</li>
+            <li>HTTP security headers (A–F grade)</li>
+            <li>HSTS · CSP · X-Frame-Options</li>
+            <li>Server disclosure · CORS · TRACE</li>
+            <li>OIDC/SAML authentication config</li>
+          </ul>
+          <div class="proto-finding">
+            <div class="f-head">Example findings</div>
+            <span class="finding-tag critical">CERT_EXPIRED</span>
+            <span class="finding-tag high">WEAK_KEY_RSA1024</span>
+            <span class="finding-tag medium">MISSING_HSTS</span>
+            <span class="finding-tag critical">OIDC_NONE_ALG</span>
+            <span class="finding-tag medium">CORS_WILDCARD</span>
+          </div>
+        </div>
+
+        <div class="proto-card purple-card">
+          <div class="proto-header">
+            <div>
+              <div class="proto-name">SSH</div>
+              <div class="proto-port">port 22</div>
+            </div>
+            <span class="badge badge-purple">SSH</span>
+          </div>
+          <ul class="proto-checks">
+            <li>Host key algorithm types</li>
+            <li>Key exchange (KEX) algorithms</li>
+            <li>Weak cipher detection</li>
+            <li>SSH protocol version (v1 detection)</li>
+            <li>Read-only TCP probe — no auth</li>
+          </ul>
+          <div style="height:48px"></div>
+          <div class="proto-finding">
+            <div class="f-head">Example findings</div>
+            <span class="finding-tag critical">SSH_WEAK_KEX</span>
+            <span class="finding-tag high">SSH_WEAK_HOST_KEY</span>
+            <span class="finding-tag critical">SSH_LEGACY_VERSION</span>
+            <span class="finding-tag ok">SSH_OK</span>
+          </div>
+        </div>
+
+        <div class="proto-card teal-card">
+          <div class="proto-header">
+            <div>
+              <div class="proto-name">LDAPS</div>
+              <div class="proto-port">port 636</div>
+            </div>
+            <span class="badge badge-teal">LDAPS</span>
+          </div>
+          <ul class="proto-checks">
+            <li>Full TLS certificate chain (same as HTTPS)</li>
+            <li>Anonymous bind detection (port 636)</li>
+            <li>Plaintext LDAP available on port 389</li>
+            <li>Active Directory / OpenLDAP compatible</li>
+          </ul>
+          <div style="height:48px"></div>
+          <div class="proto-finding">
+            <div class="f-head">Example findings</div>
+            <span class="finding-tag high">LDAP_ANON_BIND</span>
+            <span class="finding-tag high">LDAP_PLAIN_AVAILABLE</span>
+            <span class="finding-tag medium">CERT_EXPIRING_30D</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 5: SECURITY FINDINGS ░░ -->
+  <div class="slide" id="s4">
+    <div class="s-security">
+      <div class="slide-heading">SECURITY FINDINGS ENGINE</div>
+      <div class="sec-grid">
+
+        <div class="sec-card">
+          <div class="sec-cat c-cert">cert</div>
+          <div class="sec-title">Certificate</div>
+          <div class="sec-findings">
+            <div class="f"><span class="sev sev-C">C</span> CERT_EXPIRED</div>
+            <div class="f"><span class="sev sev-H">H</span> CERT_SELF_SIGNED</div>
+            <div class="f"><span class="sev sev-H">H</span> CERT_UNTRUSTED_CA</div>
+            <div class="f"><span class="sev sev-H">H</span> CERT_HOSTNAME_MISMATCH</div>
+            <div class="f"><span class="sev sev-M">M</span> CERT_WEAK_KEY_RSA</div>
+            <div class="f"><span class="sev sev-L">L</span> CERT_EXPIRING_30D</div>
+          </div>
+        </div>
+
+        <div class="sec-card">
+          <div class="sec-cat c-tls">tls</div>
+          <div class="sec-title">TLS Config</div>
+          <div class="sec-findings">
+            <div class="f"><span class="sev sev-C">C</span> TLS_LEGACY_1_0</div>
+            <div class="f"><span class="sev sev-H">H</span> TLS_LEGACY_1_1</div>
+            <div class="f"><span class="sev sev-M">M</span> TLS_WEAK_CIPHER</div>
+            <div class="f"><span class="sev sev-M">M</span> TLS_SHORT_CHAIN</div>
+            <div class="f"><span class="sev sev-L">L</span> TLS_MISSING_OCSP</div>
+            <div class="f"><span class="sev sev-L">L</span> TLS_MISSING_CRL</div>
+          </div>
+        </div>
+
+        <div class="sec-card">
+          <div class="sec-cat c-headers">headers</div>
+          <div class="sec-title">HTTP Headers</div>
+          <div class="sec-findings">
+            <div class="f"><span class="sev sev-H">H</span> MISSING_HSTS</div>
+            <div class="f"><span class="sev sev-H">H</span> MISSING_CSP</div>
+            <div class="f"><span class="sev sev-M">M</span> CORS_WILDCARD</div>
+            <div class="f"><span class="sev sev-L">L</span> SERVER_DISCLOSURE</div>
+            <div class="f"><span class="sev sev-L">L</span> HTTP_TRACE_ENABLED</div>
+            <div class="f"><span class="sev sev-L">L</span> MISSING_REFERRER_POLICY</div>
+          </div>
+        </div>
+
+        <div class="sec-card">
+          <div class="sec-cat c-ssh">ssh</div>
+          <div class="sec-title">SSH</div>
+          <div class="sec-findings">
+            <div class="f"><span class="sev sev-C">C</span> SSH_LEGACY_VERSION</div>
+            <div class="f"><span class="sev sev-C">C</span> SSH_WEAK_KEX</div>
+            <div class="f"><span class="sev sev-H">H</span> SSH_WEAK_HOST_KEY</div>
+            <div class="f"><span class="sev sev-L">L</span> SSH_UNREACHABLE</div>
+            <div class="f"><span class="sev" style="color:var(--green)">✓</span> SSH_OK</div>
+          </div>
+        </div>
+
+        <div class="sec-card">
+          <div class="sec-cat c-ldap">ldap</div>
+          <div class="sec-title">LDAP</div>
+          <div class="sec-findings">
+            <div class="f"><span class="sev sev-H">H</span> LDAP_ANON_BIND</div>
+            <div class="f"><span class="sev sev-H">H</span> LDAP_PLAIN_AVAILABLE</div>
+            <div class="f" style="margin-top:8px;color:var(--text-dim);font-size:9.5px">
+              + all cert / tls findings<br>from the LDAPS certificate
+            </div>
+          </div>
+        </div>
+
+        <div class="sec-card">
+          <div class="sec-cat c-auth">auth — oidc/saml</div>
+          <div class="sec-title">Auth Config</div>
+          <div class="sec-findings">
+            <div class="f"><span class="sev sev-C">C</span> OIDC_NONE_ALGORITHM</div>
+            <div class="f"><span class="sev sev-H">H</span> OIDC_HTTP_ISSUER</div>
+            <div class="f"><span class="sev sev-M">M</span> OIDC_IMPLICIT_FLOW</div>
+            <div class="f"><span class="sev sev-M">M</span> SAML_NO_SIGNING_CERT</div>
+            <div class="f"><span class="sev sev-C">C</span> SAML_CERT_EXPIRING</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 6: WEB DASHBOARD ░░ -->
+  <div class="slide" id="s5">
+    <div class="s-dash" style="display:flex;width:100%;max-width:1100px;gap:56px;align-items:center;">
+      <div class="dash-left">
+        <h2>WEB<br>DASHBOARD</h2>
+        <ul class="dash-feat-list">
+          <li><span class="hl">Dashboard</span> — expiry timeline, stat cards, Scan All</li>
+          <li>Scan All runs in <span class="hl">background</span> — UI stays fully accessible</li>
+          <li><span class="hl">Certificates</span> — filter, sort, detail modal</li>
+          <li><span class="hl">Endpoints</span> — HTTPS / SSH / LDAPS type badges</li>
+          <li><span class="hl">Security</span> — TLS/HTTPS · SSH · Headers · Auth tabs</li>
+          <li><span class="hl">Network Sweeps</span> — CIDR / range auto-discovery</li>
+          <li><span class="hl">RBAC</span> — Viewer · Editor · Admin</li>
+          <li><span class="hl">SIEM</span> — stdout / syslog / Beats forwarding</li>
+          <li>Mattermost <span class="hl">webhooks</span> — global or per-endpoint</li>
+          <li>Custom trusted <span class="hl">CA upload</span>, Prometheus <span class="hl">/metrics</span></li>
+        </ul>
+      </div>
+      <div class="dash-right">
+        <div class="dash-mock">
+          <div class="dash-bar">
+            <div class="dd dd-r"></div>
+            <div class="dd dd-a"></div>
+            <div class="dd dd-g"></div>
+            <span class="dt">cert-guardian — Dashboard</span>
+          </div>
+          <div class="dash-nav">
+            <span class="dn act">Dashboard</span>
+            <span class="dn">Certificates</span>
+            <span class="dn">Endpoints</span>
+            <span class="dn">Security</span>
+            <span class="dn">Sweeps</span>
+          </div>
+          <div class="dash-stats">
+            <div class="ds blue">
+              <span class="ds-num">142</span>
+              <span class="ds-label">TOTAL CERTS</span>
+            </div>
+            <div class="ds red">
+              <span class="ds-num">3</span>
+              <span class="ds-label">EXPIRING &lt;7D</span>
+            </div>
+            <div class="ds amber">
+              <span class="ds-num">7</span>
+              <span class="ds-label">HEADER ISSUES</span>
+            </div>
+            <div class="ds green">
+              <span class="ds-num">21</span>
+              <span class="ds-label">FINDINGS</span>
+            </div>
+          </div>
+          <div class="dash-rows">
+            <div class="dr err">
+              <span class="dr-host">api.prod.example.com:443</span>
+              <span class="dr-badge err">EXPIRED</span>
+              <span class="dr-days">–3 days</span>
+            </div>
+            <div class="dr err">
+              <span class="dr-host">ssh.bastion.internal:22</span>
+              <span class="dr-badge err">WEAK KEX</span>
+              <span class="dr-days">critical</span>
+            </div>
+            <div class="dr warn">
+              <span class="dr-host">mail.company.com:465</span>
+              <span class="dr-badge warn">EXPIRING</span>
+              <span class="dr-days">29 days</span>
+            </div>
+            <div class="dr ok">
+              <span class="dr-host">vpn.corp.example.com:443</span>
+              <span class="dr-badge ok">OK</span>
+              <span class="dr-days">212 days</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 7: EJBCA ░░ -->
+  <div class="slide" id="s6">
+    <div class="s-ejbca" style="display:flex;width:100%;max-width:1100px;gap:56px;align-items:center;">
+      <div class="ejbca-left">
+        <div class="ej-sub">▸ PrimeKey / EJBCA Integration</div>
+        <h2>PULL FROM<br>THE CA</h2>
+        <p class="lead">
+          Network scanning only finds certificates that are reachable on a known port.
+          EJBCA sync pulls <em>every</em> issued certificate directly from the CA —
+          including internal micro-services, staging certs, and certs not yet deployed.
+        </p>
+        <ul class="ej-feat-list">
+          <li>REST API v1 — <code style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:10px">POST /v1/search/certificates</code></li>
+          <li>mTLS (client cert + key) or API-key auth</li>
+          <li>Paginated — handles thousands of certs</li>
+          <li>CA DN filter: sync only selected CAs</li>
+          <li>Configurable interval (hours) or manual</li>
+          <li>EJBCA username → cert-guardian owner auto-map</li>
+          <li>Expiry alerts for EJBCA-only certs</li>
+          <li>Sync status in Settings: found / new / updated</li>
+        </ul>
+        <div class="ej-auth-row" style="margin-top:18px;">
+          <span class="ej-auth-chip">mTLS client cert</span>
+          <span class="ej-auth-chip">API key</span>
+          <span class="ej-auth-chip">CA cert verify</span>
+        </div>
+      </div>
+      <div class="ejbca-right">
+        <div class="ej-compare">
+          <div class="ej-compare-header">
+            <div class="ej-col-head">Network Scan</div>
+            <div class="ej-col-head">EJBCA Sync</div>
+          </div>
+          <div class="ej-row">
+            <div class="ej-cell">Discovers certs at<br>known endpoints only</div>
+            <div class="ej-cell good">Discovers ALL certs<br>ever issued by the CA</div>
+          </div>
+          <div class="ej-row">
+            <div class="ej-cell">Needs IP:port<br>to find a cert</div>
+            <div class="ej-cell good">Works without any<br>network access to cert</div>
+          </div>
+          <div class="ej-row">
+            <div class="ej-cell">Misses internal<br>micro-services</div>
+            <div class="ej-cell good">Internal PKI coverage<br>100% complete</div>
+          </div>
+          <div class="ej-row">
+            <div class="ej-cell">Misses un-deployed<br>certificates</div>
+            <div class="ej-cell good">Certs visible from day<br>of issuance</div>
+          </div>
+          <div class="ej-row">
+            <div class="ej-cell">HTTP header<br>security analysis</div>
+            <div class="ej-cell" style="color:var(--text-dim)">Metadata + expiry<br>(no endpoint to probe)</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);text-align:right;">
+          EJBCA certs shown in Certificates view with <span style="background:rgba(79,156,255,0.15);color:var(--accent);padding:1px 7px;font-size:9px;border-radius:2px;letter-spacing:0.1em">EJBCA</span> badge
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ░░ SLIDE 8: DEPLOY ░░ -->
+  <div class="slide" id="s7">
+    <div class="s-deploy">
+      <h2>READY TO<br>DEPLOY</h2>
+      <div class="sub">▸ podman-compose · kubernetes · helm · prometheus</div>
+
+      <div class="feat-grid">
+        <div class="feat"><span class="arr">→</span>TLS · SSH · LDAPS · HTTP multi-protocol scanner</div>
+        <div class="feat"><span class="arr">→</span>6 finding categories, severity C / H / M / L</div>
+        <div class="feat"><span class="arr">→</span>HTTP header scoring A–F + CORS / TRACE checks</div>
+        <div class="feat"><span class="arr">→</span>OIDC/SAML auto-discovery &amp; auth security audit</div>
+        <div class="feat"><span class="arr">→</span>EJBCA REST API sync — full internal CA coverage</div>
+        <div class="feat"><span class="arr">→</span>Network sweeps — CIDR / range auto-discovery</div>
+        <div class="feat"><span class="arr">→</span>Non-blocking Scan All — live background polling</div>
+        <div class="feat"><span class="arr">→</span>RBAC: Viewer · Editor · Admin + Pomerium / Keycloak</div>
+        <div class="feat"><span class="star">★</span>Mattermost alerts per endpoint, per cert, per owner</div>
+        <div class="feat"><span class="star">★</span>SIEM: stdout · syslog · Beats — with audit log</div>
+        <div class="feat"><span class="arr">→</span>Custom trusted CA upload, Prometheus /metrics</div>
+        <div class="feat"><span class="arr">→</span>SQLite — zero infrastructure dependencies</div>
+      </div>
+
+      <a class="gh-link" href="https://github.com/alun-hub/cert-guardian" target="_blank">
+        github.com/alun-hub/cert-guardian
+      </a>
+    </div>
+  </div>
+
+</div><!-- /slides -->
+
+<script>
+(function () {
+  const N = 8;
+  let cur = 0, busy = false;
+
+  /* cursor */
+  const cursor = document.getElementById('cursor');
+  document.addEventListener('mousemove', e => {
+    cursor.style.left = e.clientX + 'px';
+    cursor.style.top  = e.clientY + 'px';
+  });
+
+  /* progress dots */
+  const prog = document.getElementById('progress');
+  for (let i = 0; i < N; i++) {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === 0 ? ' active' : '');
+    d.addEventListener('click', () => go(i));
+    prog.appendChild(d);
+  }
+
+  function slide(i) { return document.getElementById('s' + i); }
+
+  function updateHUD() {
+    document.getElementById('counter').textContent =
+      String(cur + 1).padStart(2,'0') + ' / ' + String(N).padStart(2,'0');
+    document.querySelectorAll('.dot').forEach((d,i) =>
+      d.classList.toggle('active', i === cur));
+  }
+
+  function go(n) {
+    if (busy || n === cur || n < 0 || n >= N) return;
+    busy = true;
+    const forward = n > cur;
+    const from = slide(cur);
+    const to   = slide(n);
+
+    to.style.transition = 'none';
+    to.style.opacity = '0';
+    to.style.transform = forward ? 'translateX(48px)' : 'translateX(-48px)';
+    to.classList.remove('active','exit-left','exit-right','enter-right','enter-left');
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        from.style.transition = '';
+        from.classList.add(forward ? 'exit-left' : 'exit-right');
+        from.classList.remove('active');
+
+        to.style.transition = '';
+        to.style.opacity = '';
+        to.style.transform = '';
+        to.classList.add('active');
+
+        setTimeout(() => {
+          from.classList.remove('exit-left','exit-right','active');
+          cur = n;
+          busy = false;
+          updateHUD();
+        }, 480);
+      });
+    });
+  }
+
+  function next() { go(cur + 1); }
+  function prev() { go(cur - 1); }
+
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight','ArrowDown',' '].includes(e.key)) { e.preventDefault(); next(); }
+    if (['ArrowLeft','ArrowUp'].includes(e.key))         { e.preventDefault(); prev(); }
+  });
+
+  document.getElementById('slides').addEventListener('click', e => {
+    if (!e.target.closest('a') && !e.target.closest('.dot')) next();
+  });
+
+  let tx = 0;
+  document.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, {passive:true});
+  document.addEventListener('touchend',   e => {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 50) dx < 0 ? next() : prev();
+  }, {passive:true});
+
+  updateHUD();
+})();
+</script>
+</body>
+</html>
